@@ -135,10 +135,13 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
 
       let itemCount = 0;
       searchResults.slice(0, 15).forEach(task => {
-        if (!linkExists(userEmail, threadId, task.id)) {
-          const due = task.due ? ` (Due: ${task.due.date || task.due})` : '';
+        const taskId = String(task.task_id || task.id || task.uuid || '');
+        if (taskId && !linkExists(userEmail, threadId, taskId)) {
+          const content = task.task_content || task.content || task.text || task.title || 'Untitled Task';
+          const dueData = task.due ? (task.due.date || (typeof task.due === 'string' ? task.due : null)) : null;
+          const due = dueData ? ` (Due: ${dueData})` : '';
           const priority = task.priority ? ` [P${5 - task.priority}]` : '';
-          selectionInput.addItem(`${task.task_content || task.content} [${task.project_name}]${due}${priority}`, String(task.id), false);
+          selectionInput.addItem(`${content} [${task.project_name}]${due}${priority}`, taskId, false);
           itemCount++;
         }
       });
@@ -182,6 +185,13 @@ function showStatusCard(e) {
 
   section.addWidget(CardService.newDecoratedText().setTopLabel('Gmail Account').setText(userEmail));
   section.addWidget(CardService.newDecoratedText().setTopLabel('Todoist API').setText(tokenStatus.message).setBottomLabel(tokenStatus.success ? 'Healthy' : 'Error'));
+
+  if (tokenStatus.success) {
+    section.addWidget(CardService.newDecoratedText().setTopLabel('Projects Found').setText(String(tokenStatus.projectCount)));
+    section.addWidget(CardService.newDecoratedText().setTopLabel('Active Tasks Found').setText(String(tokenStatus.taskCount)));
+    section.addWidget(CardService.newDecoratedText().setTopLabel('Labels Found').setText(String(tokenStatus.labelCount)));
+  }
+
   section.addWidget(CardService.newDecoratedText().setTopLabel('Storage Sheet ID').setText(storageId));
 
   card.addSection(section);
@@ -284,8 +294,10 @@ function handleMultiLink(e) {
     const projectMap = {}; projects.forEach(p => projectMap[p.id] = p.name || p.title);
     selectedTaskIds.forEach(taskId => {
       const task = getTask(taskId);
-      const projectName = projectMap[task.project_id] || 'Inbox';
-      performLink(threadId, messageId, taskId, task.content || task.text, projectName, addCommentFlag === 'yes');
+      const pId = String(task.project_id || '');
+      const projectName = projectMap[pId] || 'Inbox';
+      const content = task.content || task.text || task.title || 'Untitled Task';
+      performLink(threadId, messageId, taskId, content, projectName, addCommentFlag === 'yes');
     });
     return CardService.newNavigation().updateCard(createMainCard(threadId, messageId, null, '', `Successfully attached ${selectedTaskIds.length} tasks!`));
   } catch (err) { return showErrorCard('Attaching failed: ' + err.message); }

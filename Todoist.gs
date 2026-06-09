@@ -74,38 +74,69 @@ function callTodoistApi(endpoint, method = 'GET', payload = null) {
 }
 
 /**
- * Helper to extract a list of items from various response structures.
+ * Fetches all items from a paginated endpoint.
  */
-function extractList(response, listKey) {
-  if (!response) return [];
-  if (Array.isArray(response)) return response;
-  if (typeof response === 'object') {
-    // Check specific key, then results, then items, then data, then any array property
-    const array = response[listKey] || response.results || response.items || response.data;
-    if (Array.isArray(array)) return array;
+function fetchAllPaginated(endpoint, listKey) {
+  let allItems = [];
+  let cursor = null;
+  let attempt = 0;
 
-    // If it's a map of objects, convert to array
-    for (let key in response) {
-      if (Array.isArray(response[key])) return response[key];
+  do {
+    const url = cursor ? `${endpoint}${endpoint.includes('?') ? '&' : '?'}cursor=${cursor}` : endpoint;
+    const response = callTodoistApi(url);
+    attempt++;
+
+    if (Array.isArray(response)) {
+      allItems = allItems.concat(response);
+      cursor = null;
+    } else if (response && typeof response === 'object') {
+      const items = response[listKey] || response.results || response.items || response.data || response.list;
+      if (Array.isArray(items)) {
+        allItems = allItems.concat(items);
+      } else {
+        // Check if it's a map of objects (e.g. { "id1": {...}, "id2": {...} })
+        const values = Object.values(response);
+        if (values.length > 0 && typeof values[0] === 'object' && (values[0].id || values[0].content || values[0].text || values[0].name)) {
+          allItems = allItems.concat(values);
+        } else {
+          // Aggressive fallback: find any array in the response
+          let found = false;
+          for (let key in response) {
+            if (Array.isArray(response[key])) {
+              allItems = allItems.concat(response[key]);
+              found = true;
+              break;
+            }
+          }
+          if (!found && attempt === 1) {
+            console.warn('No array or map of objects found in response for ' + endpoint, response);
+          }
+        }
+      }
+      cursor = response.next_cursor || null;
+    } else {
+      cursor = null;
     }
-  }
-  return [];
+
+    if (allItems.length > 5000) break; // Safety break
+
+  } while (cursor);
+
+  return allItems;
 }
 
 /**
  * Fetches all active tasks.
  */
 function getActiveTasks() {
-  const response = callTodoistApi('/tasks');
-  return extractList(response, 'tasks');
+  return fetchAllPaginated('/tasks', 'tasks');
 }
 
 /**
  * Fetches all projects.
  */
 function getProjects() {
-  const response = callTodoistApi('/projects');
-  return extractList(response, 'projects');
+  return fetchAllPaginated('/projects', 'projects');
 }
 
 /**
@@ -140,8 +171,7 @@ function closeTask(taskId) {
  * Fetches all labels.
  */
 function getLabels() {
-  const response = callTodoistApi('/labels');
-  return extractList(response, 'labels');
+  return fetchAllPaginated('/labels', 'labels');
 }
 
 /**
@@ -151,17 +181,18 @@ function searchTasksEnhanced(query, subject = '', sender = '', threadId = '') {
   const tasks = getActiveTasks();
   const projects = getProjects();
   const projectMap = {};
+
   projects.forEach(p => {
-    const id = p.id;
-    const name = p.name || p.title || 'Unknown Project';
-    projectMap[id] = name;
+    const id = String(p.id || p.uuid || p.v2_id || '');
+    const name = p.name || p.title || p.text || 'Unknown Project';
+    if (id) projectMap[id] = name;
   });
 
   let filtered = tasks;
   if (query) {
     const lowerQuery = query.toLowerCase();
     filtered = tasks.filter(task => {
-      const content = (task.content || task.text || '').toLowerCase();
+      const content = (task.content || task.text || task.title || task.name || task.summary || '').toLowerCase();
       return content.indexOf(lowerQuery) !== -1;
     });
   }
@@ -172,19 +203,24 @@ function searchTasksEnhanced(query, subject = '', sender = '', threadId = '') {
   const lowerSender = sender ? sender.toLowerCase() : '';
 
   filtered.forEach(task => {
-    task.project_name = projectMap[task.project_id] || 'Inbox';
-    task.task_content = task.content || task.text || 'Untitled Task';
+    const tId = String(task.id || task.uuid || task.v2_id || '');
+    const pId = String(task.project_id || '');
+
+    task.task_id = tId;
+    task.project_name = projectMap[pId] || 'Inbox';
+    task.task_content = task.content || task.text || task.title || task.name || task.summary || 'Untitled Task';
 
     let score = 0;
     const content = task.task_content.toLowerCase();
     if (lowerSubject && content.includes(lowerSubject)) score += 10;
     if (lowerSender && content.includes(lowerSender)) score += 5;
     if (lowerSubject && task.project_name.toLowerCase().includes(lowerSubject)) score += 3;
-    if (linkedTaskIds.includes(String(task.id))) score += 20;
+    if (linkedTaskIds.includes(tId)) score += 20;
 
     const today = new Date().toISOString().split('T')[0];
-    const dueDate = task.due ? (task.due.date || task.due) : null;
-    if (dueDate === today) score += 15;
+    const due = task.due;
+    const dueDate = due ? (due.date || (typeof due === 'string' ? due : null)) : null;
+    if (dueDate && dueDate.startsWith(today)) score += 15;
     else if (dueDate && dueDate > today) score += 5;
 
     task.relevance_score = score;
@@ -192,8 +228,12 @@ function searchTasksEnhanced(query, subject = '', sender = '', threadId = '') {
 
   filtered.sort((a, b) => {
     if (b.relevance_score !== a.relevance_score) return b.relevance_score - a.relevance_score;
-    const dueA = (a.due && (a.due.date || a.due)) || '9999-12-31';
-    const dueB = (b.due && (b.due.date || b.due)) || '9999-12-31';
+    const getDue = (t) => {
+      const d = t.due;
+      return (d ? (d.date || (typeof d === 'string' ? d : null)) : null) || '9999-12-31';
+    };
+    const dueA = getDue(a);
+    const dueB = getDue(b);
     if (dueA !== dueB) return dueA < dueB ? -1 : 1;
     return (b.priority || 0) - (a.priority || 0);
   });
@@ -216,8 +256,16 @@ function addComment(taskId, content) {
  */
 function testConnectivity() {
   try {
-    callTodoistApi('/projects');
-    return { success: true, message: 'Connected' };
+    const projects = getProjects();
+    const tasks = getActiveTasks();
+    const labels = getLabels();
+    return {
+      success: true,
+      message: 'Connected to Unified API v1',
+      projectCount: projects.length,
+      taskCount: tasks.length,
+      labelCount: labels.length
+    };
   } catch (e) {
     return { success: false, message: e.message };
   }
