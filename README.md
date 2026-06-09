@@ -64,6 +64,7 @@ Columns include:
 - `https://www.googleapis.com/auth/script.external_request`: Connect to Todoist API.
 - `https://www.googleapis.com/auth/userinfo.email`: Display your account email in the UI.
 - `https://www.googleapis.com/auth/spreadsheets`: Manage the storage Google Sheet.
+- `https://www.googleapis.com/auth/script.locale`: Allows the add-on to use your locale settings.
 
 ## Known Limitations
 - **Gmail Deep Links**: Links are generated as `https://mail.google.com/mail/u/0/#all/{threadId}`. If you use multiple Google accounts simultaneously, the `/u/0/` part might point to the wrong account.
