@@ -14,8 +14,8 @@
  * 9: linked_at
  */
 
-const STORAGE_SHEET_NAME = 'ThreadistLinks';
-const COLUMNS = [
+var STORAGE_SHEET_NAME = 'ThreadistLinks';
+var COLUMNS = [
   'gmail_account', 'gmail_thread_id', 'gmail_message_id', 'gmail_subject',
   'gmail_sender', 'gmail_url', 'todoist_task_id', 'todoist_task_title',
   'todoist_project_name', 'linked_at'
