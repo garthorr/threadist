@@ -2,7 +2,7 @@
  * Todoist API Integration
  */
 
-var TODOIST_API_BASE = 'https://api.todoist.com/rest/v2';
+var TODOIST_API_BASE = 'https://api.todoist.com/api/v1';
 
 /**
  * Returns the Todoist API token from UserProperties.
