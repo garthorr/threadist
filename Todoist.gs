@@ -147,16 +147,26 @@ function getTask(taskId) {
 }
 
 /**
- * Creates a new task.
+ * Creates a new task with enhanced options.
  */
-function createTask(content, projectId = null, labelIds = []) {
+function createTask(content, options = {}) {
   const payload = { content: content };
-  if (projectId) {
-    payload.project_id = projectId;
+  if (options.projectId) payload.project_id = options.projectId;
+  if (options.labelIds && options.labelIds.length > 0) payload.labels = options.labelIds;
+  if (options.priority) payload.priority = parseInt(options.priority);
+  if (options.dueDate) {
+    if (options.dueTime) {
+      // Format: YYYY-MM-DDTHH:MM:SS
+      payload.due_datetime = options.dueDate + 'T' + options.dueTime + ':00';
+    } else {
+      payload.due_date = options.dueDate;
+    }
   }
-  if (labelIds && labelIds.length > 0) {
-    payload.labels = labelIds;
+  if (options.duration && options.durationUnit) {
+    payload.duration = parseInt(options.duration);
+    payload.duration_unit = options.durationUnit;
   }
+
   return callTodoistApi('/tasks', 'POST', payload);
 }
 

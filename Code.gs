@@ -249,33 +249,86 @@ function showCreateTaskCard(e) {
   GmailApp.setCurrentMessageAccessToken(e.gmail.accessToken);
   const message = GmailApp.getMessageById(messageId);
   const card = CardService.newCardBuilder().setHeader(CardService.newCardHeader().setTitle('Create & Attach Task'));
-  const section = CardService.newCardSection()
-    .addWidget(CardService.newTextInput().setFieldName('task_content').setTitle('Task Title').setValue(message.getSubject()));
 
-  const projectPicker = CardService.newSelectionInput().setType(CardService.SelectionInputType.DROPDOWN).setFieldName('project_id').setTitle('Project');
+  // Basic Info Section
+  const basicSection = CardService.newCardSection()
+    .addWidget(CardService.newTextInput().setFieldName('task_content').setTitle('Task content').setValue(message.getSubject()))
+    .addWidget(CardService.newDatePicker().setFieldName('due_date').setTitle('Due date'));
+
+  const projectPicker = CardService.newSelectionInput().setType(CardService.SelectionInputType.DROPDOWN).setFieldName('project_id').setTitle('Select a project');
   try {
-    getProjects().forEach(p => projectPicker.addItem(p.name || p.title, p.id, (p.name || p.title) === 'Inbox'));
-  } catch (err) { section.addWidget(CardService.newTextParagraph().setText('Error loading projects.')); }
-  section.addWidget(projectPicker);
+    getProjects().forEach(p => {
+      const name = p.name || p.title;
+      projectPicker.addItem(name, p.id, name === 'Inbox');
+    });
+  } catch (err) { basicSection.addWidget(CardService.newTextParagraph().setText('Error loading projects.')); }
+  basicSection.addWidget(projectPicker);
+  card.addSection(basicSection);
 
-  const labelPicker = CardService.newSelectionInput().setType(CardService.SelectionInputType.CHECK_BOX).setFieldName('label_ids').setTitle('Labels');
+  // Advanced Info Section (Collapsible)
+  const advancedSection = CardService.newCardSection().setHeader('More task details').setCollapsible(true).setNumUncollapsibleWidgets(0);
+
+  advancedSection.addWidget(CardService.newTimePicker().setFieldName('due_time').setTitle('Due time'));
+
+  const durationPicker = CardService.newSelectionInput().setType(CardService.SelectionInputType.DROPDOWN).setFieldName('duration_val').setTitle('Duration');
+  durationPicker.addItem('No duration', '0', true);
+  [15, 30, 45, 60, 90, 120].forEach(min => durationPicker.addItem(`${min} minutes`, String(min), false));
+  advancedSection.addWidget(durationPicker);
+
+  const priorityPicker = CardService.newSelectionInput().setType(CardService.SelectionInputType.DROPDOWN).setFieldName('priority').setTitle('Priority');
+  priorityPicker.addItem('P1', '4', false);
+  priorityPicker.addItem('P2', '3', false);
+  priorityPicker.addItem('P3', '2', false);
+  priorityPicker.addItem('P4 (Default)', '1', true);
+  advancedSection.addWidget(priorityPicker);
+
+  const labelPicker = CardService.newSelectionInput().setType(CardService.SelectionInputType.CHECK_BOX).setFieldName('label_ids').setTitle('Select labels');
   try {
     getLabels().forEach(l => labelPicker.addItem(l.name, l.name, false));
   } catch (err) { console.error('Error loading labels', err); }
-  section.addWidget(labelPicker);
+  advancedSection.addWidget(labelPicker);
 
-  section.addWidget(CardService.newTextButton().setText('Create & Attach').setOnClickAction(CardService.newAction().setFunctionName('handleCreateAndLink').setParameters({threadId, messageId})));
-  card.addSection(section);
+  card.addSection(advancedSection);
+
+  // Actions
+  card.addSection(CardService.newCardSection().addWidget(
+    CardService.newTextButton()
+      .setText('Add task')
+      .setBackgroundColor('#db4c3f') // Todoist red
+      .setOnClickAction(CardService.newAction().setFunctionName('handleCreateAndLink').setParameters({threadId, messageId}))
+  ));
+
   return card.build();
 }
 
 function handleCreateAndLink(e) {
   const {threadId, messageId} = e.parameters;
-  const {task_content, project_id} = e.formInput;
+  const {task_content, project_id, due_date, due_time, duration_val, priority} = e.formInput;
   const label_ids = e.formInputs.label_ids || [];
   GmailApp.setCurrentMessageAccessToken(e.gmail.accessToken);
+
+  const options = {
+    projectId: project_id,
+    labelIds: label_ids,
+    priority: priority
+  };
+
+  if (due_date) {
+    const date = new Date(due_date.msSinceEpoch);
+    options.dueDate = Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+
+    if (due_time) {
+      options.dueTime = `${String(due_time.hours).padStart(2, '0')}:${String(due_time.minutes).padStart(2, '0')}`;
+    }
+  }
+
+  if (duration_val && duration_val !== '0') {
+    options.duration = duration_val;
+    options.durationUnit = 'minute';
+  }
+
   try {
-    const task = createTask(task_content, project_id, label_ids);
+    const task = createTask(task_content, options);
     const projects = getProjects();
     const projectName = projects.find(p => p.id === project_id)?.name || 'Unknown';
     performLink(threadId, messageId, task.id, task.content, projectName, true);
