@@ -66,6 +66,9 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
   } else {
     links.forEach(link => {
       const taskText = `<b>${link.todoist_task_title}</b>\n<i>Project: ${link.todoist_project_name}</i>`;
+      const priorityColors = { 4: '#d1453b', 3: '#eb8909', 2: '#246fe0', 1: '#808080' };
+      // Note: Priority isn't in link storage, but we can add a visual indicator if we fetch it or just keep it simple.
+
       linkedSection.addWidget(
         CardService.newDecoratedText()
           .setText(taskText)
@@ -76,11 +79,20 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
               .setOpenLink(CardService.newOpenLink().setUrl('https://todoist.com/showTask?id=' + link.todoist_task_id))
           )
       );
-      linkedSection.addWidget(
-        CardService.newTextButton()
-          .setText('Unlink')
-          .setOnClickAction(CardService.newAction().setFunctionName('confirmUnlink').setParameters({threadId: threadId, taskId: String(link.todoist_task_id), messageId: messageId}))
-      );
+
+      const buttonGroup = CardService.newButtonSet()
+        .addButton(
+          CardService.newTextButton()
+            .setText('Complete')
+            .setOnClickAction(CardService.newAction().setFunctionName('handleCompleteTask').setParameters({threadId: threadId, taskId: String(link.todoist_task_id), messageId: messageId}))
+        )
+        .addButton(
+          CardService.newTextButton()
+            .setText('Unlink')
+            .setOnClickAction(CardService.newAction().setFunctionName('confirmUnlink').setParameters({threadId: threadId, taskId: String(link.todoist_task_id), messageId: messageId}))
+        );
+
+      linkedSection.addWidget(buttonGroup);
     });
   }
   card.addSection(linkedSection);
@@ -109,9 +121,17 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
 
   searchSection.addWidget(searchInput);
   searchSection.addWidget(
-    CardService.newTextButton()
-      .setText('Search')
-      .setOnClickAction(CardService.newAction().setFunctionName('handleSearch').setParameters({threadId: threadId, messageId: messageId}))
+    CardService.newButtonSet()
+      .addButton(
+        CardService.newTextButton()
+          .setText('Search')
+          .setOnClickAction(CardService.newAction().setFunctionName('handleSearch').setParameters({threadId: threadId, messageId: messageId}))
+      )
+      .addButton(
+        CardService.newTextButton()
+          .setText('Load Recent')
+          .setOnClickAction(CardService.newAction().setFunctionName('handleLoadRecent').setParameters({threadId: threadId, messageId: messageId}))
+      )
   );
 
   if (searchResults) {
@@ -134,8 +154,11 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
       searchResults.slice(0, 15).forEach(task => {
         const isLinked = links.some(l => String(l.todoist_task_id) === String(task.id));
         if (!isLinked) {
-          const due = task.due ? ` (Due: ${task.due.date})` : '';
-          selectionInput.addItem(`${task.content} [${task.project_name}]${due}`, String(task.id), false);
+          const content = task.task_content || task.content || task.text || 'Untitled Task';
+          const dueData = task.due ? (task.due.date || task.due) : null;
+          const due = dueData ? ` (Due: ${dueData})` : '';
+          const priority = task.priority ? ` [P${5 - task.priority}]` : ''; // Todoist P1 is internal 4, P4 is internal 1
+          selectionInput.addItem(`${content} [${task.project_name}]${due}${priority}`, String(task.id), false);
           itemCount++;
         }
       });
@@ -188,12 +211,33 @@ function showCreateTaskCard(e) {
 
   try {
     const projects = getProjects();
-    projects.forEach(p => projectPicker.addItem(p.name, p.id, p.name === 'Inbox'));
+    if (projects.length === 0) {
+      section.addWidget(CardService.newTextParagraph().setText('<i>No projects found in your Todoist account.</i>'));
+    }
+    projects.forEach(p => {
+      const name = p.name || p.title || 'Untitled Project';
+      projectPicker.addItem(name, p.id, name === 'Inbox');
+    });
   } catch (err) {
     section.addWidget(CardService.newTextParagraph().setText('Error loading projects.'));
   }
 
   section.addWidget(projectPicker);
+
+  const labelPicker = CardService.newSelectionInput()
+    .setType(CardService.SelectionInputType.CHECK_BOX)
+    .setFieldName('label_ids')
+    .setTitle('Labels');
+
+  try {
+    const labels = getLabels();
+    labels.forEach(l => labelPicker.addItem(l.name, l.name, false));
+  } catch (err) {
+    console.error('Error loading labels', err);
+  }
+
+  section.addWidget(labelPicker);
+
   section.addWidget(
     CardService.newTextButton()
       .setText('Create & Link')
@@ -212,12 +256,13 @@ function handleCreateAndLink(e) {
   const messageId = e.parameters.messageId;
   const content = e.formInput.task_content;
   const projectId = e.formInput.project_id;
+  const labelIds = e.formInputs.label_ids || [];
 
   const accessToken = e.gmail.accessToken;
   GmailApp.setCurrentMessageAccessToken(accessToken);
 
   try {
-    const task = createTask(content, projectId);
+    const task = createTask(content, projectId, labelIds);
     const projects = getProjects();
     const projectName = projects.find(p => p.id === projectId)?.name || 'Unknown';
 
@@ -317,6 +362,23 @@ function handleSearch(e) {
 }
 
 /**
+ * Handles loading recent tasks.
+ */
+function handleLoadRecent(e) {
+  const threadId = e.parameters.threadId;
+  const messageId = e.parameters.messageId;
+  const accessToken = e.gmail.accessToken;
+  GmailApp.setCurrentMessageAccessToken(accessToken);
+
+  try {
+    const results = searchTasksEnhanced('', '', '', threadId); // No query/subject/sender means it will prioritize linked and upcoming
+    return CardService.newNavigation().updateCard(createMainCard(threadId, messageId, results, ''));
+  } catch (err) {
+    return showErrorCard('Load recent failed: ' + err.message);
+  }
+}
+
+/**
  * Shows confirmation for unlinking.
  */
 function confirmUnlink(e) {
@@ -342,6 +404,29 @@ function confirmUnlink(e) {
 
   card.addSection(section);
   return card.build();
+}
+
+/**
+ * Handles task completion.
+ */
+function handleCompleteTask(e) {
+  const threadId = e.parameters.threadId;
+  const taskId = e.parameters.taskId;
+  const messageId = e.parameters.messageId;
+
+  const accessToken = e.gmail.accessToken;
+  GmailApp.setCurrentMessageAccessToken(accessToken);
+
+  try {
+    closeTask(taskId);
+    deleteLink(threadId, taskId);
+    return CardService.newActionResponseBuilder()
+      .setNavigation(CardService.newNavigation().updateCard(createMainCard(threadId, messageId, null, '', 'Task completed and unlinked!')))
+      .setNotification(CardService.newNotification().setText('Task completed'))
+      .build();
+  } catch (err) {
+    return showErrorCard('Failed to complete task: ' + err.message);
+  }
 }
 
 /**
