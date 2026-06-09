@@ -22,21 +22,28 @@ function setTodoistToken(token) {
  * Makes a request to the Todoist API.
  */
 function callTodoistApi(endpoint, method = 'GET', payload = null) {
-  const token = getTodoistToken();
+  let token = getTodoistToken();
   if (!token) {
     throw new Error('Todoist API token not set. Please go to Settings to configure it.');
+  }
+
+  // Sanitize token: remove whitespace and any accidental "Bearer " prefix
+  token = token.trim();
+  if (token.toLowerCase().startsWith('bearer ')) {
+    token = token.substring(7).trim();
   }
 
   const options = {
     method: method.toUpperCase(),
     headers: {
-      'Authorization': 'Bearer ' + token
+      'Authorization': 'Bearer ' + token,
+      'Accept': 'application/json'
     },
-    contentType: 'application/json',
     muteHttpExceptions: true
   };
 
   if (payload) {
+    options.contentType = 'application/json';
     options.payload = JSON.stringify(payload);
   }
 
