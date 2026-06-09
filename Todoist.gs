@@ -118,12 +118,30 @@ function getTask(taskId) {
 /**
  * Creates a new task.
  */
-function createTask(content, projectId = null) {
+function createTask(content, projectId = null, labelIds = []) {
   const payload = { content: content };
   if (projectId) {
     payload.project_id = projectId;
   }
+  if (labelIds && labelIds.length > 0) {
+    payload.labels = labelIds;
+  }
   return callTodoistApi('/tasks', 'POST', payload);
+}
+
+/**
+ * Completes a task.
+ */
+function closeTask(taskId) {
+  return callTodoistApi('/tasks/' + taskId + '/close', 'POST');
+}
+
+/**
+ * Fetches all labels.
+ */
+function getLabels() {
+  const response = callTodoistApi('/labels');
+  return extractList(response, 'labels');
 }
 
 /**
