@@ -64,6 +64,7 @@ Columns include:
 - `https://www.googleapis.com/auth/script.external_request`: Connect to Todoist API.
 - `https://www.googleapis.com/auth/userinfo.email`: Display your account email in the UI.
 - `https://www.googleapis.com/auth/spreadsheets`: Manage the storage Google Sheet.
+- `https://www.googleapis.com/auth/script.locale`: Allows the add-on to use your locale settings.
 
 ## Known Limitations
 - **Gmail Deep Links**: Links are generated as `https://mail.google.com/mail/u/0/#all/{threadId}`. If you use multiple Google accounts simultaneously, the `/u/0/` part might point to the wrong account.
@@ -80,3 +81,14 @@ Columns include:
 7. [ ] Creating a new task works and links it automatically.
 8. [ ] Unlinking removes the association from the Google Sheet and updates the UI.
 9. [ ] Errors (e.g., invalid API token) are displayed as user-friendly messages.
+
+## Troubleshooting Todoist API Errors
+
+If you encounter errors when searching or linking tasks, check the following:
+
+- **Invalid API Token (401)**: Ensure you have copied the correct "API token" from Todoist **Settings > Integrations > Developer**. If you reset your token in Todoist, you must update it in the add-on settings.
+- **Access Forbidden (403)**: Ensure your account has permissions for the tasks/projects you are trying to access.
+- **Search Not Working**: If search returns no results, try a broader query. The add-on searches task content (text).
+- **Projects Not Loading**: If the project picker in "Create Task" is empty, ensure you have active projects in Todoist.
+- **Connection Issues**: Google Apps Script sometimes experiences temporary connection issues. If an error persists, try again after a few minutes.
+- **Console Logs**: Developers can check execution logs in the Google Apps Script editor for more detailed error information.
