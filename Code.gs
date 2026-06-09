@@ -37,6 +37,14 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
     card.addSection(CardService.newCardSection().addWidget(CardService.newTextParagraph().setText('<b>' + statusMsg + '</b>')));
   }
 
+  // Check for Token
+  if (!getTodoistToken()) {
+    const setupSection = CardService.newCardSection()
+      .setHeader('Configuration Required')
+      .addWidget(CardService.newTextParagraph().setText('Please configure your Todoist API token in Settings to start linking emails to tasks.'));
+    card.addSection(setupSection);
+  }
+
   // Section 1: Email Metadata
   const metaSection = CardService.newCardSection()
     .setHeader('Email Details')

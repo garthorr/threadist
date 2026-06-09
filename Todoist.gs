@@ -21,18 +21,18 @@ function setTodoistToken(token) {
 /**
  * Makes a request to the Todoist API.
  */
-function callTodoistApi(endpoint, method = 'get', payload = null) {
+function callTodoistApi(endpoint, method = 'GET', payload = null) {
   const token = getTodoistToken();
   if (!token) {
-    throw new Error('Todoist API token not set. Please go to Settings.');
+    throw new Error('Todoist API token not set. Please go to Settings to configure it.');
   }
 
   const options = {
-    method: method,
+    method: method.toUpperCase(),
     headers: {
-      'Authorization': 'Bearer ' + token,
-      'Content-Type': 'application/json'
+      'Authorization': 'Bearer ' + token
     },
+    contentType: 'application/json',
     muteHttpExceptions: true
   };
 
@@ -48,12 +48,34 @@ function callTodoistApi(endpoint, method = 'get', payload = null) {
   if (responseCode >= 200 && responseCode < 300) {
     return responseContent ? JSON.parse(responseContent) : null;
   } else {
-    let errorMsg = 'Todoist API error';
+    console.error('Todoist API Error:', {
+      endpoint: endpoint,
+      method: method,
+      code: responseCode,
+      body: responseContent
+    });
+
+    let userMsg = `Todoist API Error (Status ${responseCode})`;
     try {
       const errorJson = JSON.parse(responseContent);
-      errorMsg = errorJson.error || responseContent;
-    } catch (e) {}
-    throw new Error(errorMsg);
+      if (errorJson.error) {
+        userMsg += `: ${errorJson.error}`;
+      } else if (typeof errorJson === 'string') {
+        userMsg += `: ${errorJson}`;
+      }
+    } catch (e) {
+      if (responseContent) {
+        userMsg += `: ${responseContent.substring(0, 100)}`;
+      }
+    }
+
+    if (responseCode === 401) {
+      userMsg = 'Todoist Authentication Failed: The API token is invalid or expired. Please update it in Settings.';
+    } else if (responseCode === 403) {
+      userMsg = 'Todoist Access Forbidden: You do not have permission for this action.';
+    }
+
+    throw new Error(userMsg);
   }
 }
 
@@ -61,14 +83,16 @@ function callTodoistApi(endpoint, method = 'get', payload = null) {
  * Fetches all active tasks.
  */
 function getActiveTasks() {
-  return callTodoistApi('/tasks');
+  const tasks = callTodoistApi('/tasks');
+  return Array.isArray(tasks) ? tasks : [];
 }
 
 /**
  * Fetches all projects.
  */
 function getProjects() {
-  return callTodoistApi('/projects');
+  const projects = callTodoistApi('/projects');
+  return Array.isArray(projects) ? projects : [];
 }
 
 /**
@@ -86,7 +110,7 @@ function createTask(content, projectId = null) {
   if (projectId) {
     payload.project_id = projectId;
   }
-  return callTodoistApi('/tasks', 'post', payload);
+  return callTodoistApi('/tasks', 'POST', payload);
 }
 
 /**
@@ -105,7 +129,8 @@ function searchTasksEnhanced(query, subject = '', sender = '', threadId = '') {
   }
 
   // Get recently linked task IDs to prioritize them
-  const linkedTaskIds = getLinksForThread(threadId).map(l => String(l.todoist_task_id));
+  const links = getLinksForThread(threadId);
+  const linkedTaskIds = links.map(l => String(l.todoist_task_id));
 
   const lowerSubject = subject ? subject.toLowerCase() : '';
   const lowerSender = sender ? sender.toLowerCase() : '';
@@ -149,7 +174,7 @@ function searchTasksEnhanced(query, subject = '', sender = '', threadId = '') {
  * Adds a comment to a task.
  */
 function addComment(taskId, content) {
-  return callTodoistApi('/comments', 'post', {
+  return callTodoistApi('/comments', 'POST', {
     task_id: taskId,
     content: content
   });
