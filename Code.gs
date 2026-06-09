@@ -134,8 +134,10 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
       searchResults.slice(0, 15).forEach(task => {
         const isLinked = links.some(l => String(l.todoist_task_id) === String(task.id));
         if (!isLinked) {
-          const due = task.due ? ` (Due: ${task.due.date})` : '';
-          selectionInput.addItem(`${task.content} [${task.project_name}]${due}`, String(task.id), false);
+          const content = task.task_content || task.content || task.text || 'Untitled Task';
+          const dueData = task.due ? (task.due.date || task.due) : null;
+          const due = dueData ? ` (Due: ${dueData})` : '';
+          selectionInput.addItem(`${content} [${task.project_name}]${due}`, String(task.id), false);
           itemCount++;
         }
       });
@@ -188,7 +190,13 @@ function showCreateTaskCard(e) {
 
   try {
     const projects = getProjects();
-    projects.forEach(p => projectPicker.addItem(p.name, p.id, p.name === 'Inbox'));
+    if (projects.length === 0) {
+      section.addWidget(CardService.newTextParagraph().setText('<i>No projects found in your Todoist account.</i>'));
+    }
+    projects.forEach(p => {
+      const name = p.name || p.title || 'Untitled Project';
+      projectPicker.addItem(name, p.id, name === 'Inbox');
+    });
   } catch (err) {
     section.addWidget(CardService.newTextParagraph().setText('Error loading projects.'));
   }
