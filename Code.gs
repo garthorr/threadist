@@ -12,8 +12,7 @@ function onGmailMessage(e) {
     GmailApp.setCurrentMessageAccessToken(accessToken);
 
     const message = GmailApp.getMessageById(messageId);
-    const thread = message.getThread();
-    const threadId = thread.getId();
+    const threadId = message.getThread().getId();
 
     return createMainCard(threadId, messageId);
   } catch (err) {
@@ -27,60 +26,45 @@ function onGmailMessage(e) {
 function createMainCard(threadId, messageId, searchResults = null, query = '', statusMsg = null) {
   const message = GmailApp.getMessageById(messageId);
   const subject = message.getSubject();
-  const sender = message.getFrom();
   const userEmail = Session.getActiveUser().getEmail();
 
   const card = CardService.newCardBuilder();
-  card.setHeader(CardService.newCardHeader().setTitle('Threadist').setSubtitle('Gmail to Todoist'));
+  card.setHeader(CardService.newCardHeader().setTitle('Threadist').setSubtitle('Attach Thread to Todoist'));
 
   if (statusMsg) {
     card.addSection(CardService.newCardSection().addWidget(CardService.newTextParagraph().setText('<b>' + statusMsg + '</b>')));
   }
 
-  // Check for Token
-  if (!getTodoistToken()) {
-    const setupSection = CardService.newCardSection()
-      .setHeader('Configuration Required')
-      .addWidget(CardService.newTextParagraph().setText('Please configure your Todoist API token in Settings to start linking emails to tasks.'));
-    card.addSection(setupSection);
-  }
-
-  // Section 1: Email Metadata
-  const metaSection = CardService.newCardSection()
-    .setHeader('Email Details')
-    .setCollapsible(true)
-    .setNumUncollapsibleWidgets(1)
-    .addWidget(CardService.newDecoratedText().setTopLabel('Subject').setText(subject).setWrapText(true))
-    .addWidget(CardService.newDecoratedText().setTopLabel('Sender').setText(sender))
-    .addWidget(CardService.newDecoratedText().setTopLabel('Account').setText(userEmail))
-    .addWidget(CardService.newDecoratedText().setTopLabel('Thread ID').setText(threadId));
-
-  card.addSection(metaSection);
-
-  // Section 2: Linked Tasks
-  const linkedSection = CardService.newCardSection().setHeader('Linked Todoist Tasks');
+  // Linked Tasks Section
   const links = getLinksForThread(threadId);
+  const linkedSection = CardService.newCardSection().setHeader('Linked Todoist Tasks');
 
   if (links.length === 0) {
-    linkedSection.addWidget(CardService.newTextParagraph().setText('No tasks linked to this thread.'));
+    linkedSection.addWidget(CardService.newTextParagraph().setText('No tasks attached to this thread.'));
   } else {
     links.forEach(link => {
-      const taskText = `<b>${link.todoist_task_title}</b>\n<i>Project: ${link.todoist_project_name}</i>`;
-      const priorityColors = { 4: '#d1453b', 3: '#eb8909', 2: '#246fe0', 1: '#808080' };
-      // Note: Priority isn't in link storage, but we can add a visual indicator if we fetch it or just keep it simple.
+      let taskStatus = 'Loading...';
+      try {
+        const task = getTask(link.todoist_task_id);
+        taskStatus = task.is_completed ? '✅ Completed' : '⭕ Open';
+      } catch (e) {
+        taskStatus = 'Error fetching status';
+      }
 
-      linkedSection.addWidget(
-        CardService.newDecoratedText()
-          .setText(taskText)
-          .setWrapText(true)
-          .setButton(
-            CardService.newTextButton()
-              .setText('Open')
-              .setOpenLink(CardService.newOpenLink().setUrl('https://todoist.com/showTask?id=' + link.todoist_task_id))
-          )
-      );
+      const taskText = `<b>${link.todoist_task_title}</b>\n<i>${link.todoist_project_name} • ${taskStatus}</i>\n<font color="#777777">Source: ${link.gmail_account}</font>`;
 
-      const buttonGroup = CardService.newButtonSet()
+      const decorated = CardService.newDecoratedText()
+        .setText(taskText)
+        .setWrapText(true)
+        .setButton(
+          CardService.newTextButton()
+            .setText('Open')
+            .setOpenLink(CardService.newOpenLink().setUrl('https://todoist.com/showTask?id=' + link.todoist_task_id))
+        );
+
+      linkedSection.addWidget(decorated);
+
+      const actions = CardService.newButtonSet()
         .addButton(
           CardService.newTextButton()
             .setText('Complete')
@@ -88,50 +72,49 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
         )
         .addButton(
           CardService.newTextButton()
-            .setText('Unlink')
+            .setText('Copy Search')
+            .setOnClickAction(CardService.newAction().setFunctionName('handleCopySearch').setParameters({query: `rfc822msgid:${link.gmail_message_id}`}))
+        )
+        .addButton(
+          CardService.newTextButton()
+            .setText('Detach')
             .setOnClickAction(CardService.newAction().setFunctionName('confirmUnlink').setParameters({threadId: threadId, taskId: String(link.todoist_task_id), messageId: messageId}))
         );
 
-      linkedSection.addWidget(buttonGroup);
+      linkedSection.addWidget(actions);
     });
   }
   card.addSection(linkedSection);
 
-  // Section 3: Create New Task Shortcut
-  const createSection = CardService.newCardSection().setHeader('Quick Actions');
-  createSection.addWidget(
+  // Quick Actions Section
+  const quickActions = CardService.newCardSection().setHeader('Quick Actions');
+  quickActions.addWidget(
     CardService.newTextButton()
-      .setText('Create New Task From Email')
+      .setText('Create New Task From Thread')
       .setOnClickAction(CardService.newAction().setFunctionName('showCreateTaskCard').setParameters({threadId: threadId, messageId: messageId}))
   );
-  card.addSection(createSection);
+  quickActions.addWidget(
+    CardService.newTextButton()
+      .setText('Add-on Status')
+      .setOnClickAction(CardService.newAction().setFunctionName('showStatusCard'))
+  );
+  card.addSection(quickActions);
 
-  // Section 4: Search and Link
-  const searchSection = CardService.newCardSection().setHeader('Link Existing Task');
-
+  // Search and Link Section
+  const searchSection = CardService.newCardSection().setHeader('Attach Existing Task');
   const searchInput = CardService.newTextInput()
     .setFieldName('search_query')
-    .setTitle('Search Todoist Tasks')
+    .setTitle('Search Todoist')
     .setHint('Search by name')
-    .setSuggestions(CardService.newSuggestions().addSuggestions(['Today', 'Inbox', 'Priority 1']));
+    .setSuggestions(CardService.newSuggestions().addSuggestions(['Today', 'Inbox']));
 
-  if (query) {
-    searchInput.setValue(query);
-  }
+  if (query) searchInput.setValue(query);
 
   searchSection.addWidget(searchInput);
   searchSection.addWidget(
     CardService.newButtonSet()
-      .addButton(
-        CardService.newTextButton()
-          .setText('Search')
-          .setOnClickAction(CardService.newAction().setFunctionName('handleSearch').setParameters({threadId: threadId, messageId: messageId}))
-      )
-      .addButton(
-        CardService.newTextButton()
-          .setText('Load Recent')
-          .setOnClickAction(CardService.newAction().setFunctionName('handleLoadRecent').setParameters({threadId: threadId, messageId: messageId}))
-      )
+      .addButton(CardService.newTextButton().setText('Search').setOnClickAction(CardService.newAction().setFunctionName('handleSearch').setParameters({threadId, messageId})))
+      .addButton(CardService.newTextButton().setText('Recent').setOnClickAction(CardService.newAction().setFunctionName('handleLoadRecent').setParameters({threadId, messageId})))
   );
 
   if (searchResults) {
@@ -148,17 +131,14 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
       const selectionInput = CardService.newSelectionInput()
         .setType(CardService.SelectionInputType.CHECK_BOX)
         .setFieldName('selected_tasks')
-        .setTitle('Select tasks to link');
+        .setTitle('Select tasks to attach');
 
       let itemCount = 0;
       searchResults.slice(0, 15).forEach(task => {
-        const isLinked = links.some(l => String(l.todoist_task_id) === String(task.id));
-        if (!isLinked) {
-          const content = task.task_content || task.content || task.text || 'Untitled Task';
-          const dueData = task.due ? (task.due.date || task.due) : null;
-          const due = dueData ? ` (Due: ${dueData})` : '';
-          const priority = task.priority ? ` [P${5 - task.priority}]` : ''; // Todoist P1 is internal 4, P4 is internal 1
-          selectionInput.addItem(`${content} [${task.project_name}]${due}${priority}`, String(task.id), false);
+        if (!linkExists(userEmail, threadId, task.id)) {
+          const due = task.due ? ` (Due: ${task.due.date || task.due})` : '';
+          const priority = task.priority ? ` [P${5 - task.priority}]` : '';
+          selectionInput.addItem(`${task.task_content || task.content} [${task.project_name}]${due}${priority}`, String(task.id), false);
           itemCount++;
         }
       });
@@ -168,148 +148,149 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
         searchSection.addWidget(
           CardService.newTextButton()
             .setText('Attach Selected Tasks')
-            .setOnClickAction(CardService.newAction().setFunctionName('handleMultiLink').setParameters({threadId: threadId, messageId: messageId}))
+            .setOnClickAction(CardService.newAction().setFunctionName('handleMultiLink').setParameters({threadId, messageId}))
         );
       } else {
-        searchSection.addWidget(CardService.newTextParagraph().setText('All found tasks are already linked or no results matching.'));
+        searchSection.addWidget(CardService.newTextParagraph().setText('No new tasks matching or already attached.'));
       }
     }
   }
-
   card.addSection(searchSection);
 
   return card.build();
 }
 
 /**
- * Shows the Create Task card.
+ * Handles copy search command.
  */
-function showCreateTaskCard(e) {
-  const threadId = e.parameters.threadId;
-  const messageId = e.parameters.messageId;
-  const accessToken = e.gmail.accessToken;
-  GmailApp.setCurrentMessageAccessToken(accessToken);
+function handleCopySearch(e) {
+  return CardService.newActionResponseBuilder()
+    .setNotification(CardService.newNotification().setText('Search query copied to clipboard: ' + e.parameters.query))
+    .build();
+}
 
-  const message = GmailApp.getMessageById(messageId);
-
-  const card = CardService.newCardBuilder();
-  card.setHeader(CardService.newCardHeader().setTitle('Create New Todoist Task'));
-
+/**
+ * Shows the Status card.
+ */
+function showStatusCard(e) {
+  const card = CardService.newCardBuilder().setHeader(CardService.newCardHeader().setTitle('Threadist Status'));
   const section = CardService.newCardSection();
 
-  section.addWidget(
-    CardService.newTextInput()
-      .setFieldName('task_content')
-      .setTitle('Task Title')
-      .setValue(message.getSubject())
-  );
+  const tokenStatus = testConnectivity();
+  const storageId = PropertiesService.getUserProperties().getProperty('STORAGE_SPREADSHEET_ID') || 'Not Set';
+  const userEmail = Session.getActiveUser().getEmail();
 
-  const projectPicker = CardService.newSelectionInput()
-    .setType(CardService.SelectionInputType.DROPDOWN)
-    .setFieldName('project_id')
-    .setTitle('Project');
-
-  try {
-    const projects = getProjects();
-    if (projects.length === 0) {
-      section.addWidget(CardService.newTextParagraph().setText('<i>No projects found in your Todoist account.</i>'));
-    }
-    projects.forEach(p => {
-      const name = p.name || p.title || 'Untitled Project';
-      projectPicker.addItem(name, p.id, name === 'Inbox');
-    });
-  } catch (err) {
-    section.addWidget(CardService.newTextParagraph().setText('Error loading projects.'));
-  }
-
-  section.addWidget(projectPicker);
-
-  const labelPicker = CardService.newSelectionInput()
-    .setType(CardService.SelectionInputType.CHECK_BOX)
-    .setFieldName('label_ids')
-    .setTitle('Labels');
-
-  try {
-    const labels = getLabels();
-    labels.forEach(l => labelPicker.addItem(l.name, l.name, false));
-  } catch (err) {
-    console.error('Error loading labels', err);
-  }
-
-  section.addWidget(labelPicker);
-
-  section.addWidget(
-    CardService.newTextButton()
-      .setText('Create & Link')
-      .setOnClickAction(CardService.newAction().setFunctionName('handleCreateAndLink').setParameters({threadId: threadId, messageId: messageId}))
-  );
+  section.addWidget(CardService.newDecoratedText().setTopLabel('Gmail Account').setText(userEmail));
+  section.addWidget(CardService.newDecoratedText().setTopLabel('Todoist API').setText(tokenStatus.message).setBottomLabel(tokenStatus.success ? 'Healthy' : 'Error'));
+  section.addWidget(CardService.newDecoratedText().setTopLabel('Storage Sheet ID').setText(storageId));
 
   card.addSection(section);
   return card.build();
 }
 
 /**
- * Handles creation and linking.
+ * Handles task completion. (Source of truth remains Todoist, we just refresh).
  */
-function handleCreateAndLink(e) {
+function handleCompleteTask(e) {
   const threadId = e.parameters.threadId;
+  const taskId = e.parameters.taskId;
   const messageId = e.parameters.messageId;
-  const content = e.formInput.task_content;
-  const projectId = e.formInput.project_id;
-  const labelIds = e.formInputs.label_ids || [];
 
   const accessToken = e.gmail.accessToken;
   GmailApp.setCurrentMessageAccessToken(accessToken);
 
   try {
-    const task = createTask(content, projectId, labelIds);
-    const projects = getProjects();
-    const projectName = projects.find(p => p.id === projectId)?.name || 'Unknown';
-
-    performLink(threadId, messageId, task.id, task.content, projectName, true);
-
-    return CardService.newNavigation().popToRoot().updateCard(createMainCard(threadId, messageId, null, '', 'Successfully created and linked task!'));
+    closeTask(taskId);
+    return CardService.newActionResponseBuilder()
+      .setNavigation(CardService.newNavigation().updateCard(createMainCard(threadId, messageId, null, '', 'Task marked as completed in Todoist.')))
+      .setNotification(CardService.newNotification().setText('Task completed'))
+      .build();
   } catch (err) {
-    return showErrorCard('Failed to create task: ' + err.message);
+    return showErrorCard('Failed to complete task: ' + err.message);
   }
 }
 
 /**
- * Handles multi-link action.
+ * Entry points for cards and handlers below (reused from previous implementation with minor fixes for naming)
  */
+
+function handleSearch(e) {
+  const {threadId, messageId} = e.parameters;
+  const query = e.formInput.search_query;
+  GmailApp.setCurrentMessageAccessToken(e.gmail.accessToken);
+  try {
+    const message = GmailApp.getMessageById(messageId);
+    const results = searchTasksEnhanced(query, message.getSubject(), message.getFrom(), threadId);
+    return CardService.newNavigation().updateCard(createMainCard(threadId, messageId, results, query));
+  } catch (err) { return showErrorCard('Search failed: ' + err.message); }
+}
+
+function handleLoadRecent(e) {
+  const {threadId, messageId} = e.parameters;
+  GmailApp.setCurrentMessageAccessToken(e.gmail.accessToken);
+  try {
+    const results = searchTasksEnhanced('', '', '', threadId);
+    return CardService.newNavigation().updateCard(createMainCard(threadId, messageId, results, ''));
+  } catch (err) { return showErrorCard('Load recent failed: ' + err.message); }
+}
+
+function showCreateTaskCard(e) {
+  const {threadId, messageId} = e.parameters;
+  GmailApp.setCurrentMessageAccessToken(e.gmail.accessToken);
+  const message = GmailApp.getMessageById(messageId);
+  const card = CardService.newCardBuilder().setHeader(CardService.newCardHeader().setTitle('Create & Attach Task'));
+  const section = CardService.newCardSection()
+    .addWidget(CardService.newTextInput().setFieldName('task_content').setTitle('Task Title').setValue(message.getSubject()));
+
+  const projectPicker = CardService.newSelectionInput().setType(CardService.SelectionInputType.DROPDOWN).setFieldName('project_id').setTitle('Project');
+  try {
+    getProjects().forEach(p => projectPicker.addItem(p.name || p.title, p.id, (p.name || p.title) === 'Inbox'));
+  } catch (err) { section.addWidget(CardService.newTextParagraph().setText('Error loading projects.')); }
+  section.addWidget(projectPicker);
+
+  const labelPicker = CardService.newSelectionInput().setType(CardService.SelectionInputType.CHECK_BOX).setFieldName('label_ids').setTitle('Labels');
+  try {
+    getLabels().forEach(l => labelPicker.addItem(l.name, l.name, false));
+  } catch (err) { console.error('Error loading labels', err); }
+  section.addWidget(labelPicker);
+
+  section.addWidget(CardService.newTextButton().setText('Create & Attach').setOnClickAction(CardService.newAction().setFunctionName('handleCreateAndLink').setParameters({threadId, messageId})));
+  card.addSection(section);
+  return card.build();
+}
+
+function handleCreateAndLink(e) {
+  const {threadId, messageId} = e.parameters;
+  const {task_content, project_id} = e.formInput;
+  const label_ids = e.formInputs.label_ids || [];
+  GmailApp.setCurrentMessageAccessToken(e.gmail.accessToken);
+  try {
+    const task = createTask(task_content, project_id, label_ids);
+    const projects = getProjects();
+    const projectName = projects.find(p => p.id === project_id)?.name || 'Unknown';
+    performLink(threadId, messageId, task.id, task.content, projectName, true);
+    return CardService.newNavigation().popToRoot().updateCard(createMainCard(threadId, messageId, null, '', 'Successfully created and attached task!'));
+  } catch (err) { return showErrorCard('Failed to create task: ' + err.message); }
+}
+
 function handleMultiLink(e) {
-  const threadId = e.parameters.threadId;
-  const messageId = e.parameters.messageId;
+  const {threadId, messageId} = e.parameters;
   const selectedTaskIds = e.formInputs.selected_tasks;
   const addCommentFlag = e.formInput.add_comment;
-
-  if (!selectedTaskIds || selectedTaskIds.length === 0) {
-    return CardService.newActionResponseBuilder().setNotification(CardService.newNotification().setText('No tasks selected')).build();
-  }
-
-  const accessToken = e.gmail.accessToken;
-  GmailApp.setCurrentMessageAccessToken(accessToken);
-
+  if (!selectedTaskIds || selectedTaskIds.length === 0) return CardService.newActionResponseBuilder().setNotification(CardService.newNotification().setText('No tasks selected')).build();
+  GmailApp.setCurrentMessageAccessToken(e.gmail.accessToken);
   try {
     const projects = getProjects();
-    const projectMap = {};
-    projects.forEach(p => projectMap[p.id] = p.name);
-
+    const projectMap = {}; projects.forEach(p => projectMap[p.id] = p.name || p.title);
     selectedTaskIds.forEach(taskId => {
       const task = getTask(taskId);
       const projectName = projectMap[task.project_id] || 'Inbox';
-      performLink(threadId, messageId, taskId, task.content, projectName, addCommentFlag === 'yes');
+      performLink(threadId, messageId, taskId, task.content || task.text, projectName, addCommentFlag === 'yes');
     });
-
-    return CardService.newNavigation().updateCard(createMainCard(threadId, messageId, null, '', `Successfully linked ${selectedTaskIds.length} tasks!`));
-  } catch (err) {
-    return showErrorCard('Linking failed: ' + err.message);
-  }
+    return CardService.newNavigation().updateCard(createMainCard(threadId, messageId, null, '', `Successfully attached ${selectedTaskIds.length} tasks!`));
+  } catch (err) { return showErrorCard('Attaching failed: ' + err.message); }
 }
 
-/**
- * Helper to perform linking and storage.
- */
 function performLink(threadId, messageId, taskId, taskTitle, projectName, shouldAddComment) {
   const message = GmailApp.getMessageById(messageId);
   const subject = message.getSubject();
@@ -336,164 +317,56 @@ function performLink(threadId, messageId, taskId, taskTitle, projectName, should
     try {
       const comment = 'Linked Gmail Thread: ' + subject + '\nURL: ' + threadUrl;
       addComment(taskId, comment);
-    } catch (err) {
-      console.error('Failed to add comment', err);
-    }
+    } catch (err) { console.error('Failed to add comment', err); }
   }
 }
 
-/**
- * Handles search action.
- */
-function handleSearch(e) {
-  const threadId = e.parameters.threadId;
-  const messageId = e.parameters.messageId;
-  const query = e.formInput.search_query;
-  const accessToken = e.gmail.accessToken;
-  GmailApp.setCurrentMessageAccessToken(accessToken);
-
-  try {
-    const message = GmailApp.getMessageById(messageId);
-    const results = searchTasksEnhanced(query, message.getSubject(), message.getFrom(), threadId);
-    return CardService.newNavigation().updateCard(createMainCard(threadId, messageId, results, query));
-  } catch (err) {
-    return showErrorCard('Search failed: ' + err.message);
-  }
-}
-
-/**
- * Handles loading recent tasks.
- */
-function handleLoadRecent(e) {
-  const threadId = e.parameters.threadId;
-  const messageId = e.parameters.messageId;
-  const accessToken = e.gmail.accessToken;
-  GmailApp.setCurrentMessageAccessToken(accessToken);
-
-  try {
-    const results = searchTasksEnhanced('', '', '', threadId); // No query/subject/sender means it will prioritize linked and upcoming
-    return CardService.newNavigation().updateCard(createMainCard(threadId, messageId, results, ''));
-  } catch (err) {
-    return showErrorCard('Load recent failed: ' + err.message);
-  }
-}
-
-/**
- * Shows confirmation for unlinking.
- */
 function confirmUnlink(e) {
-  const threadId = e.parameters.threadId;
-  const taskId = e.parameters.taskId;
-  const messageId = e.parameters.messageId;
-
-  const card = CardService.newCardBuilder();
-  card.setHeader(CardService.newCardHeader().setTitle('Confirm Unlink'));
-
+  const {threadId, taskId, messageId} = e.parameters;
+  const card = CardService.newCardBuilder().setHeader(CardService.newCardHeader().setTitle('Confirm Detach'));
   const section = CardService.newCardSection()
-    .addWidget(CardService.newTextParagraph().setText('Are you sure you want to unlink this task? This will not delete the task from Todoist.'))
-    .addWidget(
-      CardService.newTextButton()
-        .setText('Yes, Unlink')
-        .setOnClickAction(CardService.newAction().setFunctionName('handleUnlinkConfirmed').setParameters({threadId: threadId, taskId: taskId, messageId: messageId}))
-    )
-    .addWidget(
-      CardService.newTextButton()
-        .setText('Cancel')
-        .setOnClickAction(CardService.newAction().setFunctionName('goBackToMain').setParameters({threadId: threadId, messageId: messageId}))
-    );
-
+    .addWidget(CardService.newTextParagraph().setText('Are you sure you want to detach this task? This will not delete the task from Todoist.'))
+    .addWidget(CardService.newTextButton().setText('Yes, Detach').setOnClickAction(CardService.newAction().setFunctionName('handleUnlinkConfirmed').setParameters({threadId, taskId, messageId})))
+    .addWidget(CardService.newTextButton().setText('Cancel').setOnClickAction(CardService.newAction().setFunctionName('goBackToMain')));
   card.addSection(section);
   return card.build();
 }
 
-/**
- * Handles task completion.
- */
-function handleCompleteTask(e) {
-  const threadId = e.parameters.threadId;
-  const taskId = e.parameters.taskId;
-  const messageId = e.parameters.messageId;
-
-  const accessToken = e.gmail.accessToken;
-  GmailApp.setCurrentMessageAccessToken(accessToken);
-
-  try {
-    closeTask(taskId);
-    deleteLink(threadId, taskId);
-    return CardService.newActionResponseBuilder()
-      .setNavigation(CardService.newNavigation().updateCard(createMainCard(threadId, messageId, null, '', 'Task completed and unlinked!')))
-      .setNotification(CardService.newNotification().setText('Task completed'))
-      .build();
-  } catch (err) {
-    return showErrorCard('Failed to complete task: ' + err.message);
-  }
-}
-
-/**
- * Handles unlink confirmed.
- */
 function handleUnlinkConfirmed(e) {
-  const threadId = e.parameters.threadId;
-  const taskId = e.parameters.taskId;
-  const messageId = e.parameters.messageId;
-
+  const {threadId, taskId, messageId} = e.parameters;
   deleteLink(threadId, taskId);
-
-  const accessToken = e.gmail.accessToken;
-  GmailApp.setCurrentMessageAccessToken(accessToken);
-
-  return CardService.newNavigation().popCard().updateCard(createMainCard(threadId, messageId, null, '', 'Successfully unlinked task.'));
+  GmailApp.setCurrentMessageAccessToken(e.gmail.accessToken);
+  return CardService.newNavigation().popCard().updateCard(createMainCard(threadId, messageId, null, '', 'Successfully detached task.'));
 }
 
-function goBackToMain(e) {
-  return CardService.newNavigation().popCard();
-}
+function goBackToMain(e) { return CardService.newNavigation().popCard(); }
 
-/**
- * Settings Card.
- */
 function onSettings(e) {
-  const card = CardService.newCardBuilder();
-  card.setHeader(CardService.newCardHeader().setTitle('Settings'));
-
+  const card = CardService.newCardBuilder().setHeader(CardService.newCardHeader().setTitle('Settings'));
   const section = CardService.newCardSection();
   const token = getTodoistToken() || '';
+  const storageId = PropertiesService.getUserProperties().getProperty('STORAGE_SPREADSHEET_ID') || '';
 
-  section.addWidget(
-    CardService.newTextInput()
-      .setFieldName('todoist_token')
-      .setTitle('Todoist API Token')
-      .setHint('Get this from Todoist Settings > Integrations')
-      .setValue(token)
-  );
-
-  section.addWidget(
-    CardService.newTextButton()
-      .setText('Save Token')
-      .setOnClickAction(CardService.newAction().setFunctionName('saveSettings'))
-  );
-
+  section.addWidget(CardService.newTextInput().setFieldName('todoist_token').setTitle('Todoist API Token').setValue(token));
+  section.addWidget(CardService.newTextInput().setFieldName('storage_id').setTitle('Storage Spreadsheet ID').setHint('Leave blank to use default').setValue(storageId));
+  section.addWidget(CardService.newTextButton().setText('Save Settings').setOnClickAction(CardService.newAction().setFunctionName('saveSettings')));
   card.addSection(section);
   return card.build();
 }
 
-/**
- * Saves settings.
- */
 function saveSettings(e) {
   const token = e.formInput.todoist_token;
-  setTodoistToken(token);
-  return CardService.newActionResponseBuilder()
-    .setNotification(CardService.newNotification().setText('Settings saved'))
-    .build();
+  const storageId = e.formInput.storage_id;
+  const props = PropertiesService.getUserProperties();
+  if (token) props.setProperty('TODOIST_API_TOKEN', token);
+  if (storageId) props.setProperty('STORAGE_SPREADSHEET_ID', storageId);
+  else props.deleteProperty('STORAGE_SPREADSHEET_ID');
+
+  return CardService.newActionResponseBuilder().setNotification(CardService.newNotification().setText('Settings saved')).build();
 }
 
-/**
- * Error Card helper.
- */
 function showErrorCard(message) {
-  const card = CardService.newCardBuilder();
-  card.setHeader(CardService.newCardHeader().setTitle('Error'));
+  const card = CardService.newCardBuilder().setHeader(CardService.newCardHeader().setTitle('Error'));
   card.addSection(CardService.newCardSection().addWidget(CardService.newTextParagraph().setText(message)));
   return card.build();
 }

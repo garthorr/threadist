@@ -210,3 +210,15 @@ function addComment(taskId, content) {
     content: content
   });
 }
+
+/**
+ * Tests connectivity to Todoist API.
+ */
+function testConnectivity() {
+  try {
+    callTodoistApi('/projects');
+    return { success: true, message: 'Connected' };
+  } catch (e) {
+    return { success: false, message: e.message };
+  }
+}
