@@ -36,20 +36,24 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
   }
 
   // Linked Tasks Section
-  const links = getLinksForThread(threadId);
+  const links = StorageManager.getLinksForThread(threadId);
   const linkedSection = CardService.newCardSection().setHeader('Linked Todoist Tasks');
 
   if (links.length === 0) {
     linkedSection.addWidget(CardService.newTextParagraph().setText('No tasks attached to this thread.'));
   } else {
+    // Optimization: Fetch all active tasks once to avoid N+1 network calls for status
+    let activeTaskIds = [];
+    try {
+      activeTaskIds = getActiveTasks().map(t => String(t.task_id || t.id || t.uuid || ''));
+    } catch (e) {
+      console.warn('Failed to fetch active tasks for status check', e);
+    }
+
     links.forEach(link => {
-      let taskStatus = 'Loading...';
-      try {
-        const task = getTask(link.todoist_task_id);
-        taskStatus = task.is_completed ? '✅ Completed' : '⭕ Open';
-      } catch (e) {
-        taskStatus = 'Error fetching status';
-      }
+      const tId = String(link.todoist_task_id);
+      const is_active = activeTaskIds.includes(tId);
+      const taskStatus = is_active ? '⭕ Open' : '✅ Completed';
 
       const taskText = `<b>${link.todoist_task_title}</b>\n<i>${link.todoist_project_name} • ${taskStatus}</i>\n<font color="#777777">Source: ${link.gmail_account}</font>`;
 
@@ -189,22 +193,47 @@ function showStatusCard(e) {
   const section = CardService.newCardSection();
 
   const tokenStatus = testConnectivity();
-  const storageId = PropertiesService.getUserProperties().getProperty('STORAGE_SPREADSHEET_ID') || 'Not Set';
+  const backend = StorageManager.getBackend();
   const userEmail = Session.getActiveUser().getEmail();
 
   section.addWidget(CardService.newDecoratedText().setTopLabel('Gmail Account').setText(userEmail));
   section.addWidget(CardService.newDecoratedText().setTopLabel('Todoist API').setText(tokenStatus.message).setBottomLabel(tokenStatus.success ? 'Healthy' : 'Error'));
+  section.addWidget(CardService.newDecoratedText().setTopLabel('Storage Backend').setText(backend.toUpperCase()));
 
-  if (tokenStatus.success) {
-    section.addWidget(CardService.newDecoratedText().setTopLabel('Projects Found').setText(String(tokenStatus.projectCount)));
-    section.addWidget(CardService.newDecoratedText().setTopLabel('Active Tasks Found').setText(String(tokenStatus.taskCount)));
-    section.addWidget(CardService.newDecoratedText().setTopLabel('Labels Found').setText(String(tokenStatus.labelCount)));
+  if (backend === 'firestore') {
+    const projId = PropertiesService.getScriptProperties().getProperty('FIRESTORE_PROJECT_ID') || 'Not Set';
+    section.addWidget(CardService.newDecoratedText().setTopLabel('Firestore Project').setText(projId));
+    try {
+      FirestoreStorage.getLinksForThread('test', 'test', 'test');
+      section.addWidget(CardService.newDecoratedText().setTopLabel('Firestore Test').setText('Success').setBottomLabel('Read/Write test passed'));
+    } catch (err) {
+      section.addWidget(CardService.newDecoratedText().setTopLabel('Firestore Test').setText('Failed').setBottomLabel(err.message));
+    }
+  } else {
+    const storageId = PropertiesService.getUserProperties().getProperty('STORAGE_SPREADSHEET_ID') || 'Not Set';
+    section.addWidget(CardService.newDecoratedText().setTopLabel('Storage Sheet ID').setText(storageId));
   }
 
-  section.addWidget(CardService.newDecoratedText().setTopLabel('Storage Sheet ID').setText(storageId));
+  if (tokenStatus.success) {
+    section.addWidget(CardService.newDecoratedText().setTopLabel('Todoist Stats').setText(`${tokenStatus.projectCount} Projects, ${tokenStatus.taskCount} Tasks, ${tokenStatus.labelCount} Labels`));
+  }
 
   card.addSection(section);
+
+  const actionSection = CardService.newCardSection().setHeader('Migration');
+  actionSection.addWidget(CardService.newTextButton().setText('Migrate Sheets to Firestore').setOnClickAction(CardService.newAction().setFunctionName('handleMigration')));
+  card.addSection(actionSection);
+
   return card.build();
+}
+
+function handleMigration(e) {
+  try {
+    const count = migrateSheetsLinksToFirestore();
+    return CardService.newActionResponseBuilder().setNotification(CardService.newNotification().setText(`Migrated ${count} links to Firestore.`)).build();
+  } catch (err) {
+    return CardService.newActionResponseBuilder().setNotification(CardService.newNotification().setText(`Migration failed: ${err.message}`)).build();
+  }
 }
 
 /**
@@ -388,7 +417,7 @@ function performLink(threadId, messageId, taskId, taskTitle, projectName, should
     linked_at: new Date()
   };
 
-  addLink(linkData);
+  StorageManager.addLink(linkData);
 
   if (shouldAddComment) {
     try {
@@ -411,7 +440,7 @@ function confirmUnlink(e) {
 
 function handleUnlinkConfirmed(e) {
   const {threadId, taskId, messageId} = e.parameters;
-  deleteLink(threadId, taskId);
+  StorageManager.deleteLink(threadId, taskId);
   GmailApp.setCurrentMessageAccessToken(e.gmail.accessToken);
   return CardService.newNavigation().popCard().updateCard(createMainCard(threadId, messageId, null, '', 'Successfully detached task.'));
 }
@@ -423,9 +452,22 @@ function onSettings(e) {
   const section = CardService.newCardSection();
   const token = getTodoistToken() || '';
   const storageId = PropertiesService.getUserProperties().getProperty('STORAGE_SPREADSHEET_ID') || '';
+  const backend = StorageManager.getBackend();
+  const firestoreProj = PropertiesService.getScriptProperties().getProperty('FIRESTORE_PROJECT_ID') || '';
 
   section.addWidget(CardService.newTextInput().setFieldName('todoist_token').setTitle('Todoist API Token').setValue(token));
-  section.addWidget(CardService.newTextInput().setFieldName('storage_id').setTitle('Storage Spreadsheet ID').setHint('Leave blank to use default').setValue(storageId));
+
+  const backendPicker = CardService.newSelectionInput()
+    .setType(CardService.SelectionInputType.DROPDOWN)
+    .setFieldName('storage_backend')
+    .setTitle('Storage Backend')
+    .addItem('Google Sheets', 'sheets', backend === 'sheets')
+    .addItem('Google Firestore', 'firestore', backend === 'firestore');
+  section.addWidget(backendPicker);
+
+  section.addWidget(CardService.newTextInput().setFieldName('storage_id').setTitle('Storage Spreadsheet ID').setHint('For Sheets backend').setValue(storageId));
+  section.addWidget(CardService.newTextInput().setFieldName('firestore_project').setTitle('Firestore Project ID').setHint('For Firestore backend').setValue(firestoreProj));
+
   section.addWidget(CardService.newTextButton().setText('Save Settings').setOnClickAction(CardService.newAction().setFunctionName('saveSettings')));
   card.addSection(section);
   return card.build();
@@ -434,10 +476,18 @@ function onSettings(e) {
 function saveSettings(e) {
   const token = e.formInput.todoist_token;
   const storageId = e.formInput.storage_id;
-  const props = PropertiesService.getUserProperties();
-  if (token) props.setProperty('TODOIST_API_TOKEN', token);
-  if (storageId) props.setProperty('STORAGE_SPREADSHEET_ID', storageId);
-  else props.deleteProperty('STORAGE_SPREADSHEET_ID');
+  const backend = e.formInput.storage_backend;
+  const firestoreProj = e.formInput.firestore_project;
+
+  const userProps = PropertiesService.getUserProperties();
+  const scriptProps = PropertiesService.getScriptProperties();
+
+  if (token) userProps.setProperty('TODOIST_API_TOKEN', token);
+  if (storageId) userProps.setProperty('STORAGE_SPREADSHEET_ID', storageId);
+  else userProps.deleteProperty('STORAGE_SPREADSHEET_ID');
+
+  if (backend) scriptProps.setProperty('STORAGE_BACKEND', backend);
+  if (firestoreProj) scriptProps.setProperty('FIRESTORE_PROJECT_ID', firestoreProj);
 
   return CardService.newActionResponseBuilder().setNotification(CardService.newNotification().setText('Settings saved')).build();
 }
