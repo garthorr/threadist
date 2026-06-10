@@ -43,6 +43,35 @@ function callFirestoreApi(method, path, body = null) {
 }
 
 /**
+ * Returns the list of OAuth scopes attached to the script's runtime token.
+ */
+function getTokenScopes() {
+  const token = ScriptApp.getOAuthToken();
+  const resp = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?access_token=' + encodeURIComponent(token), { muteHttpExceptions: true });
+  if (resp.getResponseCode() !== 200) {
+    throw new Error('tokeninfo lookup failed (' + resp.getResponseCode() + ')');
+  }
+  const info = JSON.parse(resp.getContentText());
+  return (info.scope || '').split(' ').filter(Boolean);
+}
+
+/**
+ * DIAGNOSTIC: Select this function in the Apps Script editor and click Run.
+ *
+ * Running it from the editor forces Google to show the consent dialog for
+ * EVERY scope in the manifest (which refreshes a stale authorization grant),
+ * then logs exactly which scopes the token carries.
+ */
+function debugTokenScopes() {
+  const scopes = getTokenScopes();
+  console.log('Granted scopes:\n' + scopes.join('\n'));
+  const hasFirestore = scopes.indexOf('https://www.googleapis.com/auth/datastore') !== -1
+    || scopes.indexOf('https://www.googleapis.com/auth/cloud-platform') !== -1;
+  console.log(hasFirestore ? '>>> Firestore scope PRESENT — Firestore calls should work.' : '>>> Firestore scope MISSING — the grant does not include datastore/cloud-platform.');
+  return scopes;
+}
+
+/**
  * Utility to convert regular JSON to Firestore Document format.
  */
 function toFirestoreDoc(obj) {

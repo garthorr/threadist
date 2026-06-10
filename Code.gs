@@ -31,11 +31,20 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
     card.addSection(CardService.newCardSection().addWidget(CardService.newTextParagraph().setText('<b>' + statusMsg + '</b>')));
   }
 
-  // Linked Tasks Section
-  const links = StorageManager.getLinksForThread(threadId);
+  // Linked Tasks Section. A storage failure must not brick the whole
+  // card, or the user can never reach Status/Settings to fix it.
+  let links = [];
+  let storageError = null;
+  try {
+    links = StorageManager.getLinksForThread(threadId);
+  } catch (err) {
+    storageError = err.message;
+  }
   const linkedSection = CardService.newCardSection().setHeader('Linked Todoist Tasks');
 
-  if (links.length === 0) {
+  if (storageError) {
+    linkedSection.addWidget(CardService.newTextParagraph().setText('⚠️ Storage error: ' + storageError + '\n\nUse Add-on Status below to diagnose.'));
+  } else if (links.length === 0) {
     linkedSection.addWidget(CardService.newTextParagraph().setText('No tasks attached to this thread.'));
   } else {
     // Optimization: Fetch all active tasks once to avoid N+1 network calls for status
@@ -201,6 +210,17 @@ function showStatusCard(e) {
   if (backend === 'firestore') {
     const projId = PropertiesService.getScriptProperties().getProperty('FIRESTORE_PROJECT_ID') || 'Not Set';
     section.addWidget(CardService.newDecoratedText().setTopLabel('Firestore Project').setText(projId));
+
+    // Show which scopes the runtime token actually carries, since a stale
+    // authorization grant is the usual cause of Firestore 403s.
+    try {
+      const scopes = getTokenScopes();
+      const hasScope = scopes.some(s => s === 'https://www.googleapis.com/auth/datastore' || s === 'https://www.googleapis.com/auth/cloud-platform');
+      section.addWidget(CardService.newDecoratedText().setTopLabel('Firestore OAuth Scope').setText(hasScope ? 'Granted' : 'MISSING').setBottomLabel(hasScope ? '' : 'Re-authorize: run debugTokenScopes in the editor'));
+    } catch (err) {
+      section.addWidget(CardService.newDecoratedText().setTopLabel('Firestore OAuth Scope').setText('Check failed').setBottomLabel(err.message));
+    }
+
     try {
       FirestoreStorage.getLinksForThread('test', 'test', 'test');
       section.addWidget(CardService.newDecoratedText().setTopLabel('Firestore Test').setText('Success').setBottomLabel('Read/Write test passed'));
