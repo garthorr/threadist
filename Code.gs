@@ -24,10 +24,6 @@ function onGmailMessage(e) {
  * Creates the main contextual card.
  */
 function createMainCard(threadId, messageId, searchResults = null, query = '', statusMsg = null) {
-  const message = GmailApp.getMessageById(messageId);
-  const subject = message.getSubject();
-  const userEmail = Session.getActiveUser().getEmail();
-
   const card = CardService.newCardBuilder();
   card.setHeader(CardService.newCardHeader().setTitle('Threadist').setSubtitle('Attach Thread to Todoist'));
 
@@ -35,17 +31,26 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
     card.addSection(CardService.newCardSection().addWidget(CardService.newTextParagraph().setText('<b>' + statusMsg + '</b>')));
   }
 
-  // Linked Tasks Section
-  const links = StorageManager.getLinksForThread(threadId);
+  // Linked Tasks Section. A storage failure must not brick the whole
+  // card, or the user can never reach Status/Settings to fix it.
+  let links = [];
+  let storageError = null;
+  try {
+    links = StorageManager.getLinksForThread(threadId);
+  } catch (err) {
+    storageError = err.message;
+  }
   const linkedSection = CardService.newCardSection().setHeader('Linked Todoist Tasks');
 
-  if (links.length === 0) {
+  if (storageError) {
+    linkedSection.addWidget(CardService.newTextParagraph().setText('⚠️ Storage error: ' + storageError + '\n\nUse Add-on Status below to diagnose.'));
+  } else if (links.length === 0) {
     linkedSection.addWidget(CardService.newTextParagraph().setText('No tasks attached to this thread.'));
   } else {
-    // Optimization: Fetch all active tasks once to avoid N+1 network calls for status
+    // Optimization: Fetch all active tasks once (cached) to avoid N+1 network calls for status
     let activeTaskIds = [];
     try {
-      activeTaskIds = getActiveTasks().map(t => String(t.task_id || t.id || t.uuid || ''));
+      activeTaskIds = getActiveTasksCached().map(t => t.id);
     } catch (e) {
       console.warn('Failed to fetch active tasks for status check', e);
     }
@@ -109,8 +114,8 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
   const searchInput = CardService.newTextInput()
     .setFieldName('search_query')
     .setTitle('Search Todoist')
-    .setHint('Search by name')
-    .setSuggestions(CardService.newSuggestions().addSuggestions(['Today', 'Inbox']));
+    .setHint('Start typing to see matching tasks')
+    .setSuggestionsAction(CardService.newAction().setFunctionName('handleSearchSuggestions'));
 
   if (query) searchInput.setValue(query);
 
@@ -170,6 +175,29 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
 }
 
 /**
+ * Returns live type-ahead suggestions of matching task names while the
+ * user types in the search box.
+ */
+function handleSearchSuggestions(e) {
+  const query = ((e.formInput && e.formInput.search_query) || '').toLowerCase().trim();
+  const suggestions = CardService.newSuggestions();
+  if (query.length >= 2) {
+    try {
+      const matches = [];
+      const tasks = getActiveTasksCached();
+      for (let i = 0; i < tasks.length && matches.length < 10; i++) {
+        const content = tasks[i].content || '';
+        if (content.toLowerCase().indexOf(query) !== -1) matches.push(content);
+      }
+      if (matches.length > 0) suggestions.addSuggestions(matches);
+    } catch (err) {
+      console.warn('Suggestion lookup failed', err);
+    }
+  }
+  return CardService.newSuggestionsResponseBuilder().setSuggestions(suggestions).build();
+}
+
+/**
  * Handles copy search command by showing a card with a selectable query.
  */
 function handleCopySearch(e) {
@@ -182,7 +210,9 @@ function handleCopySearch(e) {
         .addWidget(CardService.newTextInput().setFieldName('query').setTitle('Search Query').setValue(query))
         .addWidget(CardService.newTextButton().setText('Back').setOnClickAction(CardService.newAction().setFunctionName('goBackToMain')))
     );
-  return CardService.newNavigation().pushCard(card.build());
+  return CardService.newActionResponseBuilder()
+    .setNavigation(CardService.newNavigation().pushCard(card.build()))
+    .build();
 }
 
 /**
@@ -203,6 +233,17 @@ function showStatusCard(e) {
   if (backend === 'firestore') {
     const projId = PropertiesService.getScriptProperties().getProperty('FIRESTORE_PROJECT_ID') || 'Not Set';
     section.addWidget(CardService.newDecoratedText().setTopLabel('Firestore Project').setText(projId));
+
+    // Show which scopes the runtime token actually carries, since a stale
+    // authorization grant is the usual cause of Firestore 403s.
+    try {
+      const scopes = getTokenScopes();
+      const hasScope = scopes.some(s => s === 'https://www.googleapis.com/auth/datastore' || s === 'https://www.googleapis.com/auth/cloud-platform');
+      section.addWidget(CardService.newDecoratedText().setTopLabel('Firestore OAuth Scope').setText(hasScope ? 'Granted' : 'MISSING').setBottomLabel(hasScope ? '' : 'Re-authorize: run debugTokenScopes in the editor'));
+    } catch (err) {
+      section.addWidget(CardService.newDecoratedText().setTopLabel('Firestore OAuth Scope').setText('Check failed').setBottomLabel(err.message));
+    }
+
     try {
       FirestoreStorage.getLinksForThread('test', 'test', 'test');
       section.addWidget(CardService.newDecoratedText().setTopLabel('Firestore Test').setText('Success').setBottomLabel('Read/Write test passed'));
@@ -269,7 +310,9 @@ function handleSearch(e) {
   try {
     const message = GmailApp.getMessageById(messageId);
     const results = searchTasksEnhanced(query, message.getSubject(), message.getFrom(), threadId);
-    return CardService.newNavigation().updateCard(createMainCard(threadId, messageId, results, query));
+    return CardService.newActionResponseBuilder()
+      .setNavigation(CardService.newNavigation().updateCard(createMainCard(threadId, messageId, results, query)))
+      .build();
   } catch (err) { return showErrorCard('Search failed: ' + err.message); }
 }
 
@@ -278,7 +321,9 @@ function handleLoadRecent(e) {
   GmailApp.setCurrentMessageAccessToken(e.gmail.accessToken);
   try {
     const results = searchTasksEnhanced('', '', '', threadId);
-    return CardService.newNavigation().updateCard(createMainCard(threadId, messageId, results, ''));
+    return CardService.newActionResponseBuilder()
+      .setNavigation(CardService.newNavigation().updateCard(createMainCard(threadId, messageId, results, '')))
+      .build();
   } catch (err) { return showErrorCard('Load recent failed: ' + err.message); }
 }
 
@@ -295,9 +340,8 @@ function showCreateTaskCard(e) {
 
   const projectPicker = CardService.newSelectionInput().setType(CardService.SelectionInputType.DROPDOWN).setFieldName('project_id').setTitle('Select a project');
   try {
-    getProjects().forEach(p => {
-      const name = p.name || p.title;
-      projectPicker.addItem(name, p.id, name === 'Inbox');
+    getProjectsCached().forEach(p => {
+      projectPicker.addItem(p.name, p.id, p.name === 'Inbox');
     });
   } catch (err) { basicSection.addWidget(CardService.newTextParagraph().setText('Error loading projects.')); }
   basicSection.addWidget(projectPicker);
@@ -322,7 +366,7 @@ function showCreateTaskCard(e) {
 
   const labelPicker = CardService.newSelectionInput().setType(CardService.SelectionInputType.CHECK_BOX).setFieldName('label_ids').setTitle('Select labels');
   try {
-    getLabels().forEach(l => labelPicker.addItem(l.name, l.name, false));
+    getLabelsCached().forEach(l => labelPicker.addItem(l.name, l.name, false));
   } catch (err) { console.error('Error loading labels', err); }
   advancedSection.addWidget(labelPicker);
 
@@ -332,6 +376,7 @@ function showCreateTaskCard(e) {
   card.addSection(CardService.newCardSection().addWidget(
     CardService.newTextButton()
       .setText('Add task')
+      .setTextButtonStyle(CardService.TextButtonStyle.FILLED)
       .setBackgroundColor('#db4c3f') // Todoist red
       .setOnClickAction(CardService.newAction().setFunctionName('handleCreateAndLink').setParameters({threadId, messageId}))
   ));
@@ -367,10 +412,12 @@ function handleCreateAndLink(e) {
 
   try {
     const task = createTask(task_content, options);
-    const projects = getProjects();
-    const projectName = projects.find(p => p.id === project_id)?.name || 'Unknown';
+    const projects = getProjectsCached();
+    const projectName = projects.find(p => p.id === String(project_id))?.name || 'Unknown';
     performLink(threadId, messageId, task.id, task.content, projectName, true);
-    return CardService.newNavigation().popToRoot().updateCard(createMainCard(threadId, messageId, null, '', 'Successfully created and attached task!'));
+    return CardService.newActionResponseBuilder()
+      .setNavigation(CardService.newNavigation().popToRoot().updateCard(createMainCard(threadId, messageId, null, '', 'Successfully created and attached task!')))
+      .build();
   } catch (err) { return showErrorCard('Failed to create task: ' + err.message); }
 }
 
@@ -381,8 +428,8 @@ function handleMultiLink(e) {
   if (!selectedTaskIds || selectedTaskIds.length === 0) return CardService.newActionResponseBuilder().setNotification(CardService.newNotification().setText('No tasks selected')).build();
   GmailApp.setCurrentMessageAccessToken(e.gmail.accessToken);
   try {
-    const projects = getProjects();
-    const projectMap = {}; projects.forEach(p => projectMap[p.id] = p.name || p.title);
+    const projectMap = {};
+    getProjectsCached().forEach(p => projectMap[p.id] = p.name);
     selectedTaskIds.forEach(taskId => {
       const task = getTask(taskId);
       const pId = String(task.project_id || '');
@@ -390,7 +437,9 @@ function handleMultiLink(e) {
       const content = task.content || task.text || task.title || 'Untitled Task';
       performLink(threadId, messageId, taskId, content, projectName, addCommentFlag === 'yes');
     });
-    return CardService.newNavigation().updateCard(createMainCard(threadId, messageId, null, '', `Successfully attached ${selectedTaskIds.length} tasks!`));
+    return CardService.newActionResponseBuilder()
+      .setNavigation(CardService.newNavigation().updateCard(createMainCard(threadId, messageId, null, '', `Successfully attached ${selectedTaskIds.length} tasks!`)))
+      .build();
   } catch (err) { return showErrorCard('Attaching failed: ' + err.message); }
 }
 
@@ -402,7 +451,7 @@ function performLink(threadId, messageId, taskId, taskTitle, projectName, should
   const threadUrl = 'https://mail.google.com/mail/u/0/#all/' + threadId;
 
   // Extract Internet Message-ID for reliable fallback search
-  const internetMessageId = message.getHeader('Message-ID').replace(/[<>]/g, '');
+  const internetMessageId = (message.getHeader('Message-ID') || '').replace(/[<>]/g, '');
 
   const linkData = {
     gmail_account: userEmail,
@@ -442,10 +491,16 @@ function handleUnlinkConfirmed(e) {
   const {threadId, taskId, messageId} = e.parameters;
   StorageManager.deleteLink(threadId, taskId);
   GmailApp.setCurrentMessageAccessToken(e.gmail.accessToken);
-  return CardService.newNavigation().popCard().updateCard(createMainCard(threadId, messageId, null, '', 'Successfully detached task.'));
+  return CardService.newActionResponseBuilder()
+    .setNavigation(CardService.newNavigation().popCard().updateCard(createMainCard(threadId, messageId, null, '', 'Successfully detached task.')))
+    .build();
 }
 
-function goBackToMain(e) { return CardService.newNavigation().popCard(); }
+function goBackToMain(e) {
+  return CardService.newActionResponseBuilder()
+    .setNavigation(CardService.newNavigation().popCard())
+    .build();
+}
 
 function onSettings(e) {
   const card = CardService.newCardBuilder().setHeader(CardService.newCardHeader().setTitle('Settings'));
@@ -470,14 +525,15 @@ function onSettings(e) {
 
   section.addWidget(CardService.newTextButton().setText('Save Settings').setOnClickAction(CardService.newAction().setFunctionName('saveSettings')));
   card.addSection(section);
-  return card.build();
+  // Universal actions must return an array of cards.
+  return [card.build()];
 }
 
 function saveSettings(e) {
-  const token = e.formInput.todoist_token;
-  const storageId = e.formInput.storage_id;
+  const token = (e.formInput.todoist_token || '').trim();
+  const storageId = (e.formInput.storage_id || '').trim();
   const backend = e.formInput.storage_backend;
-  const firestoreProj = e.formInput.firestore_project;
+  const firestoreProj = (e.formInput.firestore_project || '').trim();
 
   const userProps = PropertiesService.getUserProperties();
   const scriptProps = PropertiesService.getScriptProperties();
@@ -489,7 +545,18 @@ function saveSettings(e) {
   if (backend) scriptProps.setProperty('STORAGE_BACKEND', backend);
   if (firestoreProj) scriptProps.setProperty('FIRESTORE_PROJECT_ID', firestoreProj);
 
-  return CardService.newActionResponseBuilder().setNotification(CardService.newNotification().setText('Settings saved')).build();
+  // Surface a misconfiguration immediately instead of failing later.
+  const savedProj = scriptProps.getProperty('FIRESTORE_PROJECT_ID');
+  let msg;
+  if (backend === 'firestore' && !savedProj) {
+    msg = 'Backend set to Firestore but no Project ID saved. Enter your Firestore Project ID and save again.';
+  } else if (backend === 'firestore') {
+    msg = 'Settings saved. Backend: Firestore (' + savedProj + ')';
+  } else {
+    msg = 'Settings saved. Backend: Sheets';
+  }
+
+  return CardService.newActionResponseBuilder().setNotification(CardService.newNotification().setText(msg)).build();
 }
 
 function showErrorCard(message) {
