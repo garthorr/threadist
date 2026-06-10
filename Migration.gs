@@ -6,6 +6,9 @@
  * Migrates existing links from Google Sheets to Firestore.
  */
 function migrateSheetsLinksToFirestore() {
+  if (!PropertiesService.getScriptProperties().getProperty('FIRESTORE_PROJECT_ID')) {
+    throw new Error('Firestore Project ID is not set. Configure it in Settings first.');
+  }
   const sheet = SheetsStorage.getStorageSheet();
   const data = sheet.getDataRange().getValues();
   const userId = Session.getActiveUser().getEmail();

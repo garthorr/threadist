@@ -15,13 +15,50 @@ Threadist is a focused Google Workspace add-on that links Gmail threads to Todoi
 - **Flexible Storage**: Supports Google Sheets or Google Cloud Firestore backends.
 - **Privacy First**: Data stays in your control (Google Drive or GCP Project).
 
+---
+
+## Setup (Step by Step)
+
+You only need a free Google account and a Todoist account. The whole setup takes about 10 minutes.
+
+### Step 1: Create the Apps Script project
+1. Go to [script.google.com](https://script.google.com) and click **New project**.
+2. Name the project `Threadist` (click "Untitled project" at the top).
+3. Click the **gear icon (Project Settings)** in the left sidebar and check **"Show 'appsscript.json' manifest file in editor"**.
+
+### Step 2: Add the code
+1. Back in the **Editor** (< > icon), open `appsscript.json` and replace its contents with the `appsscript.json` from this repository.
+2. Replace the contents of the default `Code.gs` with this repository's `Code.gs`.
+3. Add the remaining files: click the **+** next to "Files", choose **Script**, and create `Todoist`, `Storage`, `Firestore`, and `Migration`. Paste in the contents of the matching `.gs` files from this repository.
+4. Click the **save icon** (or Ctrl/Cmd+S).
+
+### Step 3: Install the add-on in Gmail
+1. In the Apps Script editor, click **Deploy > Test deployments**.
+2. Next to "Application(s): Gmail", click **Install**.
+3. Click **Done**.
+
+### Step 4: Get your Todoist API token
+1. Open Todoist and go to **Settings > Integrations > Developer**.
+2. Copy your **API token**.
+
+### Step 5: Configure Threadist
+1. Open [Gmail](https://mail.google.com) and click on any email.
+2. In the right-hand sidebar, click the **Threadist icon**.
+3. The first time, Google asks you to **authorize** the add-on — review the permissions and click **Allow**.
+4. Open the add-on's **three-dot menu (⋮) > Settings**.
+5. Paste your **Todoist API Token** and click **Save Settings**.
+
+That's it! By default Threadist stores links in a Google Sheet ("Threadist Storage") that is created automatically in your Google Drive. To verify everything works, open an email, click the Threadist icon, and click **Add-on Status** — the Todoist API should show "Healthy".
+
+---
+
 ## Storage Backends
 
 ### 1. Google Sheets (Default)
-- **Setup**: Created automatically in your Google Drive root as "Threadist Storage".
-- **Multi-Account**: To share across accounts, copy the **Spreadsheet ID** from the URL and paste it into **Settings** in your other accounts.
+- **Setup**: Created automatically in your Google Drive root as "Threadist Storage". No configuration needed.
+- **Multi-Account**: To share across accounts, copy the **Spreadsheet ID** from the URL (the long string between `/d/` and `/edit`), share the sheet with your other accounts, and paste the ID into **Settings** in those accounts.
 
-### 2. Google Cloud Firestore
+### 2. Google Cloud Firestore (Optional)
 Firestore is recommended for multi-account use. Follow these granular steps to set it up:
 
 #### A. Create/Configure GCP Project
@@ -56,16 +93,16 @@ Firestore is recommended for multi-account use. Follow these granular steps to s
 #### D. Configure Add-on
 1. Open Gmail and click the Threadist icon.
 2. Go to the three-dot menu > **Settings**.
-3. Change **Storage Backend** to `firestore`.
+3. Change **Storage Backend** to `Google Firestore`.
 4. Enter your **Firestore Project ID** in the designated field.
 5. Click **Save Settings**.
 6. Verify connectivity via the **Add-on Status** card.
 
 ## Migration
 If you are moving from Sheets to Firestore:
-1. Configure your Firestore Project ID in **Settings**.
+1. Configure your Firestore Project ID in **Settings** (the migration will refuse to run without it).
 2. Open the **Add-on Status** card.
-3. Click **Migrate Sheets to Firestore**.
+3. Click **Migrate Sheets to Firestore**. Re-running the migration is safe — existing links are overwritten, not duplicated.
 
 ## Multi-Account Setup
 1. **Host Project**: Pick one account to host the storage (Sheet or Firestore).
@@ -86,11 +123,13 @@ Threadist uses "Minimum Viable Permissions" to protect your privacy:
 - `script.locale`: UI formatting.
 
 ## Troubleshooting
+- **"Todoist API token not set"**: Open the add-on's three-dot menu > Settings and paste your token (Todoist > Settings > Integrations > Developer).
 - **Permission Denied (Firestore 403)**:
   - Ensure the **Cloud Firestore API** is enabled.
   - Ensure you have linked your Apps Script project to the GCP Project Number.
-  - Ensure you have authorized the `cloud-platform` scope during add-on authorization.
-- **Deep Link Fails**: Use the **Copy Search** button to get a Message-ID query for Gmail.
+  - Ensure you have authorized the `cloud-platform` scope during add-on authorization (remove and re-install the test deployment to re-trigger authorization).
+- **Add-on doesn't appear in Gmail**: Re-check **Deploy > Test deployments > Install**, then reload the Gmail tab.
+- **Deep Link Fails**: Gmail links use `/u/0/`, which may open the wrong account if you are signed into several. Use the **Copy Search** button to get a `rfc822msgid:` query you can paste into the Gmail search bar instead.
 
 ## Privacy & Security
 - Relationships are stored in **your** Google Drive or GCP Project.

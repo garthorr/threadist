@@ -215,7 +215,14 @@ function searchTasksEnhanced(query, subject = '', sender = '', threadId = '') {
     });
   }
 
-  const links = getLinksForThread(threadId);
+  let links = [];
+  if (threadId) {
+    try {
+      links = StorageManager.getLinksForThread(threadId);
+    } catch (e) {
+      console.warn('Could not load existing links for relevance scoring', e);
+    }
+  }
   const linkedTaskIds = links.map(l => String(l.todoist_task_id));
   const lowerSubject = subject ? subject.toLowerCase() : '';
   const lowerSender = sender ? sender.toLowerCase() : '';

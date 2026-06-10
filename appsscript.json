@@ -5,10 +5,6 @@
   },
   "exceptionLogging": "STACKDRIVER",
   "runtimeVersion": "V8",
-  "webapp": {
-    "executeAs": "USER_ACCESSING",
-    "access": "ANYONE"
-  },
   "oauthScopes": [
     "https://www.googleapis.com/auth/gmail.addons.execute",
     "https://www.googleapis.com/auth/gmail.addons.current.message.metadata",

@@ -148,8 +148,18 @@ var FirestoreStorage = {
     linkData.linked_at = linkData.linked_at || new Date();
 
     const doc = toFirestoreDoc(linkData);
-    // Use patch with currentDocument logic to avoid overwriting unless needed, or just set.
-    return callFirestoreApi('PATCH', `/links/${docId}?currentDocument.exists=false`, doc);
+    try {
+      // currentDocument.exists=false makes this a create-only write.
+      return callFirestoreApi('PATCH', `/links/${docId}?currentDocument.exists=false`, doc);
+    } catch (e) {
+      // 409 = document already exists (e.g. re-attaching a previously
+      // detached task, or re-running migration). Overwrite it so the
+      // link becomes active again.
+      if (e.message && e.message.indexOf('(409)') !== -1) {
+        return callFirestoreApi('PATCH', `/links/${docId}`, doc);
+      }
+      throw e;
+    }
   },
 
   getLinksForThread: function(userId, account, threadId) {
