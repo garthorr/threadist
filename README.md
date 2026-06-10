@@ -1,94 +1,75 @@
-# Threadist: Gmail to Todoist Connector
+# Threadist: Gmail-to-Todoist Context Connector
 
-Threadist is a Google Workspace Gmail add-on that allows you to link Gmail threads to existing Todoist tasks or create new ones directly from your inbox.
+Threadist is a focused Google Workspace add-on that links Gmail threads to Todoist tasks. It is designed around the principle that **Todoist is the source of truth for task management**, while Gmail provides the necessary context.
+
+## Problem Statement
+When managing tasks that originate from email, it's easy to lose the link between the "to-do" and the original conversation. Standard integrations often create disconnected copies or require manual copying of links. Threadist bridges this gap by attaching Gmail thread context directly to Todoist tasks, making it easy to jump back into the conversation from any device.
+
+## Daily Workflow
+1. **Discover**: Open an email thread in Gmail.
+2. **Attach**:
+   - Use the **Search** to find an existing Todoist task and "Attach" the thread.
+   - Or use **Create** to make a new Todoist task with the thread automatically attached.
+3. **Execute**: Later, in Todoist, click the Gmail link in the task's comments to jump back to the email.
+4. **Context**: Reopening the same thread in Gmail shows all attached tasks and their current status (Open/Completed).
+5. **Manage**: Complete tasks directly from Gmail or detach them if the relationship is no longer relevant.
 
 ## Features
+- **Thread Centric**: Attaches the entire Gmail thread, ensuring all related messages are accessible.
+- **Source of Truth**: Linked tasks show their real-time Todoist status (Open/Completed).
+- **Multi-Account Ready**: Designed to work across multiple Gmail accounts (Consumer & Workspace) using a single shared storage Sheet.
+- **Reliable Deep Links**: Stores message IDs and provides a "Copy Search" fallback if deep links fail.
+- **Privacy First**: Data is stored in your own Google Drive; Todoist tokens remain in your private script storage.
 
-- **Linked Task Display**: Reopening a Gmail thread shows all linked Todoist tasks at the top with project names and direct links to Todoist.
-- **Improved Task Search**: Search for existing Todoist tasks. Results are sorted by relevance (due today/upcoming first, then priority).
-- **Multi-select Linking**: Select multiple tasks from search results and link them all at once.
-- **Quick Task Creation**: Create a new Todoist task from an email subject and link it instantly, with project selection.
-- **Enhanced Metadata Storage**: Stores detailed link information in a Google Sheet for easy reference and management.
-- **Unlink with Confirmation**: Safely remove links between emails and tasks without deleting the actual task or email.
-- **Automatic Comments**: Optionally add a comment to Todoist tasks with a link back to the original Gmail thread.
+## Multi-Account Setup
+Threadist supports using a single storage Sheet and Todoist account across multiple Gmail accounts:
+1. **Storage Sheet**: Pick one account to host the "Threadist Storage" Google Sheet.
+2. **Spreadsheet ID**: Copy the ID of this spreadsheet (from the URL).
+3. **Configure**: In any other Gmail account where you install Threadist, go to **Settings** and paste the **Storage Spreadsheet ID**.
+4. **Token**: Use the same Todoist API Token across all accounts to maintain a unified task view.
 
-## Setup Instructions
+### Deployment to Consumer Accounts
+If you develop Threadist in a Workspace account, you can still use it in a personal `@gmail.com` account:
+1. In the Apps Script project, click **Deploy > Test deployments**.
+2. Select **Gmail Add-on** and follow the "Install" link while logged into your consumer account.
+3. Ensure the consumer account has permission to access the storage Sheet and Todoist API.
 
-### 1. Todoist API Setup
-1. Log in to [Todoist](https://todoist.com).
-2. Go to **Settings > Integrations > Developer**.
-3. Copy your **API token**.
-
-### 2. Google Apps Script Setup
-1. Go to [script.google.com](https://script.google.com).
-2. Create a new project named "Threadist".
-3. Replace the contents of the files with the provided code:
-   - `appsscript.json` (Project Settings > Show "appsscript.json" manifest file in editor)
-   - `Code.gs`
-   - `Todoist.gs`
-   - `Storage.gs`
-4. Save the project.
-
-### 3. Google Cloud Project & Deployment
-1. Open **Project Settings** in Apps Script.
-2. Under "Google Cloud Platform (GCP) Project", click "Change project".
-3. Follow the instructions to link it to a Google Cloud project.
-4. Configure the OAuth Consent Screen in GCP with the required scopes.
-5. In Apps Script, click **Deploy > Test deployments**.
-6. Select **Gmail Add-on** and follow the steps to install it in your account.
-
-### 4. Configuration
-1. Open Gmail.
-2. Open any email thread.
-3. Click the Threadist icon in the sidebar.
-4. If prompted, authorize the add-on. **Note**: You will need to authorize `https://www.googleapis.com/auth/spreadsheets` as the add-on will create a "Threadist Storage" spreadsheet in your Google Drive.
-5. Click the three-dot menu in the sidebar and select **Settings**.
-6. Paste your Todoist API token and click **Save**.
-
-## How Storage Works
-Threadist uses a Google Sheet named **Threadist Storage** (created automatically in your Google Drive root) to track links between Gmail threads and Todoist tasks.
-
-Columns include:
-- `gmail_account`: The email address of the user.
-- `gmail_thread_id` / `gmail_message_id`: Internal Gmail identifiers.
-- `gmail_subject` / `gmail_sender`: Metadata for display.
-- `gmail_url`: A deep link back to the email.
-- `todoist_task_id`: The ID of the linked Todoist task.
-- `todoist_task_title` / `todoist_project_name`: Metadata for display.
-- `linked_at`: Timestamp of when the link was created.
+## Storage Model (Schema v2)
+Data is stored in a Google Sheet named `ThreadistLinks` with the following columns:
+- `gmail_account`: The source email account.
+- `gmail_thread_id`: Contextual ID for the thread.
+- `gmail_message_id`: Metadata for reliable search fallback.
+- `gmail_subject`: Thread subject line.
+- `gmail_sender`: Original sender.
+- `gmail_url`: Deep link to the thread.
+- `todoist_task_id`: Linked Todoist task.
+- `todoist_task_title`: Task content.
+- `todoist_project_name`: Project context.
+- `linked_at`: Timestamp.
+- `link_status`: `active` or `unlinked` (soft-delete).
+- `unlinked_at`: Timestamp for detach actions.
+- `gmail_url_strategy`: Strategy used for link generation.
+- `schema_version`: Versioning for migrations.
 
 ## Required Google Scopes
-- `https://www.googleapis.com/auth/gmail.addons.execute`: Run the add-on.
-- `https://www.googleapis.com/auth/gmail.addons.current.message.readonly`: Read current message content.
-- `https://www.googleapis.com/auth/gmail.addons.current.message.metadata`: Read message headers (Subject, From).
-- `https://www.googleapis.com/auth/script.external_request`: Connect to Todoist API.
-- `https://www.googleapis.com/auth/userinfo.email`: Display your account email in the UI.
-- `https://www.googleapis.com/auth/spreadsheets`: Manage the storage Google Sheet.
-- `https://www.googleapis.com/auth/script.locale`: Allows the add-on to use your locale settings.
+- `gmail.addons.execute`, `gmail.addons.current.message.readonly`, `gmail.addons.current.message.metadata`: Gmail context.
+- `script.external_request`: Todoist API connectivity.
+- `userinfo.email`: Source account identification.
+- `spreadsheets`: Storage management.
+- `script.locale`: User interface localization.
 
-## Known Limitations
-- **Gmail Deep Links**: Links are generated as `https://mail.google.com/mail/u/0/#all/{threadId}`. If you use multiple Google accounts simultaneously, the `/u/0/` part might point to the wrong account.
-- **Search Limits**: Search results are limited to the top 10 matches for performance.
-- **Project Listing**: If you have hundreds of projects, the dropdown might become cumbersome.
+## Troubleshooting
+- **Deep Link Fails**: Use the "Copy Search" button in the linked task card. Paste the result into the Gmail search bar to find the exact message.
+- **Search Returns Nothing**: Ensure your Todoist Token is healthy via the "Add-on Status" card.
+- **Permission Denied**: Ensure you have authorized the `spreadsheets` scope and that you have access to the Storage Spreadsheet ID provided in Settings.
 
-## Testing Checklist
-1. [ ] Add-on loads in Gmail sidebar when a thread is open.
-2. [ ] Settings saves Todoist API token.
-3. [ ] Task search returns correct tasks from Todoist.
-4. [ ] Linking a task creates a row in the "Threadist Storage" Google Sheet.
-5. [ ] Linked tasks appear at the top of the card when reopening the thread.
-6. [ ] "Open in Todoist" button correctly navigates to the task.
-7. [ ] Creating a new task works and links it automatically.
-8. [ ] Unlinking removes the association from the Google Sheet and updates the UI.
-9. [ ] Errors (e.g., invalid API token) are displayed as user-friendly messages.
+## Privacy & Security
+- Threadist does **not** store your email content.
+- All relationships are stored in **your** Google Drive.
+- Todoist API tokens are stored in **your** user-specific Google Apps Script properties.
+- No third-party servers (other than Todoist) ever see your data.
 
-## Troubleshooting Todoist API Errors
-
-If you encounter errors when searching or linking tasks, check the following:
-
-- **Invalid API Token (401)**: Ensure you have copied the correct "API token" from Todoist **Settings > Integrations > Developer**. If you reset your token in Todoist, you must update it in the add-on settings.
-- **Access Forbidden (403)**: Ensure your account has permissions for the tasks/projects you are trying to access.
-- **Search Not Working**: If search returns no results, try a broader query. The add-on searches task content (text).
-- **Projects Not Loading**: If the project picker in "Create Task" is empty, ensure you have active projects in Todoist.
-- **Connection Issues**: Google Apps Script sometimes experiences temporary connection issues. If an error persists, try again after a few minutes.
-- **Console Logs**: Developers can check execution logs in the Google Apps Script editor for more detailed error information.
+## Roadmap
+- [ ] Task filtering/sorting by project in the "Attach" view.
+- [ ] Support for adding multiple comments per link.
+- [ ] Optional sync of Todoist labels back to Gmail.
