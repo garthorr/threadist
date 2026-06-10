@@ -140,6 +140,68 @@ function getProjects() {
 }
 
 /**
+ * Caching layer. Fetching every task/project/label on each interaction is
+ * the main source of UI sluggishness, so keep a short-lived, trimmed copy
+ * in the user cache (CacheService entries are capped at ~100KB).
+ */
+var TASK_CACHE_KEY = 'todoist_tasks_v1';
+var PROJECT_CACHE_KEY = 'todoist_projects_v1';
+var LABEL_CACHE_KEY = 'todoist_labels_v1';
+var TASK_CACHE_TTL_SECONDS = 120;
+var META_CACHE_TTL_SECONDS = 3600;
+
+function cacheGet(key) {
+  try {
+    const raw = CacheService.getUserCache().get(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+
+function cachePut(key, value, ttl) {
+  try {
+    const raw = JSON.stringify(value);
+    if (raw.length < 95000) CacheService.getUserCache().put(key, raw, ttl);
+  } catch (e) { /* caching is best-effort */ }
+}
+
+function invalidateTaskCache() {
+  try { CacheService.getUserCache().remove(TASK_CACHE_KEY); } catch (e) {}
+}
+
+function getActiveTasksCached() {
+  let tasks = cacheGet(TASK_CACHE_KEY);
+  if (tasks) return tasks;
+  tasks = getActiveTasks().map(t => ({
+    id: String(t.id || t.uuid || t.v2_id || ''),
+    content: t.content || t.text || t.title || t.name || t.summary || '',
+    project_id: String(t.project_id || ''),
+    priority: t.priority || 1,
+    due: t.due ? { date: t.due.date || (typeof t.due === 'string' ? t.due : null) } : null
+  }));
+  cachePut(TASK_CACHE_KEY, tasks, TASK_CACHE_TTL_SECONDS);
+  return tasks;
+}
+
+function getProjectsCached() {
+  let projects = cacheGet(PROJECT_CACHE_KEY);
+  if (projects) return projects;
+  projects = getProjects().map(p => ({
+    id: String(p.id || p.uuid || p.v2_id || ''),
+    name: p.name || p.title || p.text || 'Unknown Project'
+  }));
+  cachePut(PROJECT_CACHE_KEY, projects, META_CACHE_TTL_SECONDS);
+  return projects;
+}
+
+function getLabelsCached() {
+  let labels = cacheGet(LABEL_CACHE_KEY);
+  if (labels) return labels;
+  labels = getLabels().map(l => ({ name: l.name }));
+  cachePut(LABEL_CACHE_KEY, labels, META_CACHE_TTL_SECONDS);
+  return labels;
+}
+
+/**
  * Fetches a specific task by ID.
  */
 function getTask(taskId) {
@@ -175,14 +237,18 @@ function createTask(content, options = {}) {
     payload.duration_unit = options.durationUnit;
   }
 
-  return callTodoistApi('/tasks', 'POST', payload);
+  const task = callTodoistApi('/tasks', 'POST', payload);
+  invalidateTaskCache();
+  return task;
 }
 
 /**
  * Completes a task.
  */
 function closeTask(taskId) {
-  return callTodoistApi('/tasks/' + taskId + '/close', 'POST');
+  const result = callTodoistApi('/tasks/' + taskId + '/close', 'POST');
+  invalidateTaskCache();
+  return result;
 }
 
 /**
@@ -196,23 +262,17 @@ function getLabels() {
  * Searches and sorts tasks based on relevance.
  */
 function searchTasksEnhanced(query, subject = '', sender = '', threadId = '') {
-  const tasks = getActiveTasks();
-  const projects = getProjects();
+  const tasks = getActiveTasksCached();
   const projectMap = {};
 
-  projects.forEach(p => {
-    const id = String(p.id || p.uuid || p.v2_id || '');
-    const name = p.name || p.title || p.text || 'Unknown Project';
-    if (id) projectMap[id] = name;
+  getProjectsCached().forEach(p => {
+    if (p.id) projectMap[p.id] = p.name;
   });
 
   let filtered = tasks;
   if (query) {
     const lowerQuery = query.toLowerCase();
-    filtered = tasks.filter(task => {
-      const content = (task.content || task.text || task.title || task.name || task.summary || '').toLowerCase();
-      return content.indexOf(lowerQuery) !== -1;
-    });
+    filtered = tasks.filter(task => (task.content || '').toLowerCase().indexOf(lowerQuery) !== -1);
   }
 
   let links = [];
@@ -228,12 +288,10 @@ function searchTasksEnhanced(query, subject = '', sender = '', threadId = '') {
   const lowerSender = sender ? sender.toLowerCase() : '';
 
   filtered.forEach(task => {
-    const tId = String(task.id || task.uuid || task.v2_id || '');
-    const pId = String(task.project_id || '');
-
+    const tId = task.id;
     task.task_id = tId;
-    task.project_name = projectMap[pId] || 'Inbox';
-    task.task_content = task.content || task.text || task.title || task.name || task.summary || 'Untitled Task';
+    task.project_name = projectMap[task.project_id] || 'Inbox';
+    task.task_content = task.content || 'Untitled Task';
 
     let score = 0;
     const content = task.task_content.toLowerCase();

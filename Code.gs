@@ -47,10 +47,10 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
   } else if (links.length === 0) {
     linkedSection.addWidget(CardService.newTextParagraph().setText('No tasks attached to this thread.'));
   } else {
-    // Optimization: Fetch all active tasks once to avoid N+1 network calls for status
+    // Optimization: Fetch all active tasks once (cached) to avoid N+1 network calls for status
     let activeTaskIds = [];
     try {
-      activeTaskIds = getActiveTasks().map(t => String(t.task_id || t.id || t.uuid || ''));
+      activeTaskIds = getActiveTasksCached().map(t => t.id);
     } catch (e) {
       console.warn('Failed to fetch active tasks for status check', e);
     }
@@ -114,8 +114,8 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
   const searchInput = CardService.newTextInput()
     .setFieldName('search_query')
     .setTitle('Search Todoist')
-    .setHint('Search by name')
-    .setSuggestions(CardService.newSuggestions().addSuggestions(['Today', 'Inbox']));
+    .setHint('Start typing to see matching tasks')
+    .setSuggestionsAction(CardService.newAction().setFunctionName('handleSearchSuggestions'));
 
   if (query) searchInput.setValue(query);
 
@@ -172,6 +172,29 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
   card.addSection(searchSection);
 
   return card.build();
+}
+
+/**
+ * Returns live type-ahead suggestions of matching task names while the
+ * user types in the search box.
+ */
+function handleSearchSuggestions(e) {
+  const query = ((e.formInput && e.formInput.search_query) || '').toLowerCase().trim();
+  const suggestions = CardService.newSuggestions();
+  if (query.length >= 2) {
+    try {
+      const matches = [];
+      const tasks = getActiveTasksCached();
+      for (let i = 0; i < tasks.length && matches.length < 10; i++) {
+        const content = tasks[i].content || '';
+        if (content.toLowerCase().indexOf(query) !== -1) matches.push(content);
+      }
+      if (matches.length > 0) suggestions.addSuggestions(matches);
+    } catch (err) {
+      console.warn('Suggestion lookup failed', err);
+    }
+  }
+  return CardService.newSuggestionsResponseBuilder().setSuggestions(suggestions).build();
 }
 
 /**
@@ -317,9 +340,8 @@ function showCreateTaskCard(e) {
 
   const projectPicker = CardService.newSelectionInput().setType(CardService.SelectionInputType.DROPDOWN).setFieldName('project_id').setTitle('Select a project');
   try {
-    getProjects().forEach(p => {
-      const name = p.name || p.title || 'Unnamed Project';
-      projectPicker.addItem(name, String(p.id), name === 'Inbox');
+    getProjectsCached().forEach(p => {
+      projectPicker.addItem(p.name, p.id, p.name === 'Inbox');
     });
   } catch (err) { basicSection.addWidget(CardService.newTextParagraph().setText('Error loading projects.')); }
   basicSection.addWidget(projectPicker);
@@ -344,7 +366,7 @@ function showCreateTaskCard(e) {
 
   const labelPicker = CardService.newSelectionInput().setType(CardService.SelectionInputType.CHECK_BOX).setFieldName('label_ids').setTitle('Select labels');
   try {
-    getLabels().forEach(l => labelPicker.addItem(l.name, l.name, false));
+    getLabelsCached().forEach(l => labelPicker.addItem(l.name, l.name, false));
   } catch (err) { console.error('Error loading labels', err); }
   advancedSection.addWidget(labelPicker);
 
@@ -390,8 +412,8 @@ function handleCreateAndLink(e) {
 
   try {
     const task = createTask(task_content, options);
-    const projects = getProjects();
-    const projectName = projects.find(p => p.id === project_id)?.name || 'Unknown';
+    const projects = getProjectsCached();
+    const projectName = projects.find(p => p.id === String(project_id))?.name || 'Unknown';
     performLink(threadId, messageId, task.id, task.content, projectName, true);
     return CardService.newActionResponseBuilder()
       .setNavigation(CardService.newNavigation().popToRoot().updateCard(createMainCard(threadId, messageId, null, '', 'Successfully created and attached task!')))
@@ -406,8 +428,8 @@ function handleMultiLink(e) {
   if (!selectedTaskIds || selectedTaskIds.length === 0) return CardService.newActionResponseBuilder().setNotification(CardService.newNotification().setText('No tasks selected')).build();
   GmailApp.setCurrentMessageAccessToken(e.gmail.accessToken);
   try {
-    const projects = getProjects();
-    const projectMap = {}; projects.forEach(p => projectMap[p.id] = p.name || p.title);
+    const projectMap = {};
+    getProjectsCached().forEach(p => projectMap[p.id] = p.name);
     selectedTaskIds.forEach(taskId => {
       const task = getTask(taskId);
       const pId = String(task.project_id || '');
