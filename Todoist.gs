@@ -143,7 +143,15 @@ function getProjects() {
  * Fetches a specific task by ID.
  */
 function getTask(taskId) {
-  return callTodoistApi('/tasks/' + taskId);
+  try {
+    return callTodoistApi('/tasks/' + taskId);
+  } catch (e) {
+    // If task not found (404), it might be completed.
+    if (e.message.indexOf('404') !== -1) {
+      return { is_completed: true, content: 'Completed Task', id: taskId };
+    }
+    throw e;
+  }
 }
 
 /**

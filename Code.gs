@@ -134,9 +134,11 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
         .setTitle('Select tasks to attach');
 
       let itemCount = 0;
+      const activeLinkedTaskIds = links.map(l => String(l.todoist_task_id));
+
       searchResults.slice(0, 15).forEach(task => {
         const taskId = String(task.task_id || task.id || task.uuid || '');
-        if (taskId && !linkExists(userEmail, threadId, taskId)) {
+        if (taskId && activeLinkedTaskIds.indexOf(taskId) === -1) {
           const content = task.task_content || task.content || task.text || task.title || 'Untitled Task';
           const dueData = task.due ? (task.due.date || (typeof task.due === 'string' ? task.due : null)) : null;
           const due = dueData ? ` (Due: ${dueData})` : '';
@@ -164,12 +166,19 @@ function createMainCard(threadId, messageId, searchResults = null, query = '', s
 }
 
 /**
- * Handles copy search command.
+ * Handles copy search command by showing a card with a selectable query.
  */
 function handleCopySearch(e) {
-  return CardService.newActionResponseBuilder()
-    .setNotification(CardService.newNotification().setText('Search query copied to clipboard: ' + e.parameters.query))
-    .build();
+  const query = e.parameters.query;
+  const card = CardService.newCardBuilder()
+    .setHeader(CardService.newCardHeader().setTitle('Copy Search Query'))
+    .addSection(
+      CardService.newCardSection()
+        .addWidget(CardService.newTextParagraph().setText('Copy and paste this into the Gmail search bar to find the exact thread:'))
+        .addWidget(CardService.newTextInput().setFieldName('query').setTitle('Search Query').setValue(query))
+        .addWidget(CardService.newTextButton().setText('Back').setOnClickAction(CardService.newAction().setFunctionName('goBackToMain')))
+    );
+  return CardService.newNavigation().pushCard(card.build());
 }
 
 /**
@@ -363,10 +372,13 @@ function performLink(threadId, messageId, taskId, taskTitle, projectName, should
   const userEmail = Session.getActiveUser().getEmail();
   const threadUrl = 'https://mail.google.com/mail/u/0/#all/' + threadId;
 
+  // Extract Internet Message-ID for reliable fallback search
+  const internetMessageId = message.getHeader('Message-ID').replace(/[<>]/g, '');
+
   const linkData = {
     gmail_account: userEmail,
     gmail_thread_id: threadId,
-    gmail_message_id: messageId,
+    gmail_message_id: internetMessageId,
     gmail_subject: subject,
     gmail_sender: sender,
     gmail_url: threadUrl,
