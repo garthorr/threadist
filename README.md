@@ -52,11 +52,14 @@ Data is stored in a Google Sheet named `ThreadistLinks` with the following colum
 - `schema_version`: Versioning for migrations.
 
 ## Required Google Scopes
-- `gmail.addons.execute`, `gmail.addons.current.message.readonly`, `gmail.addons.current.message.metadata`: Gmail context.
-- `script.external_request`: Todoist API connectivity.
-- `userinfo.email`: Source account identification.
-- `spreadsheets`: Storage management.
-- `script.locale`: User interface localization.
+Threadist is designed with a "Minimum Viable Permissions" approach to protect your privacy.
+
+- `https://www.googleapis.com/auth/gmail.addons.execute`: **Essential**. Allows the add-on to run when you open a Gmail message.
+- `https://www.googleapis.com/auth/gmail.addons.current.message.metadata`: **Context**. Allows the add-on to read the subject, sender, and Internet Message-ID of the currently open email to create links. **Does not allow reading the email body.**
+- `https://www.googleapis.com/auth/script.external_request`: **Integration**. Allows the add-on to connect to the Todoist API to search and create tasks.
+- `https://www.googleapis.com/auth/userinfo.email`: **Account Identification**. Used to track which Gmail account created a link in multi-account environments.
+- `https://www.googleapis.com/auth/spreadsheets`: **Storage**. Allows the add-on to read/write relationship data to the "Threadist Storage" sheet in your Google Drive.
+- `https://www.googleapis.com/auth/script.locale`: **UI**. Allows the add-on to format dates and times according to your account settings.
 
 ## Troubleshooting
 - **Deep Link Fails**: Use the "Copy Search" button in the linked task card. Paste the result into the Gmail search bar to find the exact message.
