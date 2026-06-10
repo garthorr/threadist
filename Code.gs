@@ -488,10 +488,10 @@ function onSettings(e) {
 }
 
 function saveSettings(e) {
-  const token = e.formInput.todoist_token;
-  const storageId = e.formInput.storage_id;
+  const token = (e.formInput.todoist_token || '').trim();
+  const storageId = (e.formInput.storage_id || '').trim();
   const backend = e.formInput.storage_backend;
-  const firestoreProj = e.formInput.firestore_project;
+  const firestoreProj = (e.formInput.firestore_project || '').trim();
 
   const userProps = PropertiesService.getUserProperties();
   const scriptProps = PropertiesService.getScriptProperties();
@@ -503,7 +503,18 @@ function saveSettings(e) {
   if (backend) scriptProps.setProperty('STORAGE_BACKEND', backend);
   if (firestoreProj) scriptProps.setProperty('FIRESTORE_PROJECT_ID', firestoreProj);
 
-  return CardService.newActionResponseBuilder().setNotification(CardService.newNotification().setText('Settings saved')).build();
+  // Surface a misconfiguration immediately instead of failing later.
+  const savedProj = scriptProps.getProperty('FIRESTORE_PROJECT_ID');
+  let msg;
+  if (backend === 'firestore' && !savedProj) {
+    msg = 'Backend set to Firestore but no Project ID saved. Enter your Firestore Project ID and save again.';
+  } else if (backend === 'firestore') {
+    msg = 'Settings saved. Backend: Firestore (' + savedProj + ')';
+  } else {
+    msg = 'Settings saved. Backend: Sheets';
+  }
+
+  return CardService.newActionResponseBuilder().setNotification(CardService.newNotification().setText(msg)).build();
 }
 
 function showErrorCard(message) {
