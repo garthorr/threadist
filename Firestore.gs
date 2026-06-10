@@ -5,7 +5,7 @@
 /**
  * Makes a request to the Firestore REST API.
  */
-function callFirestoreApi(method, path, body = null) {
+function callFirestoreApi(method = 'GET', path = '', body = null) {
   const props = PropertiesService.getScriptProperties();
   const projectId = props.getProperty('FIRESTORE_PROJECT_ID');
   const databaseId = props.getProperty('FIRESTORE_DATABASE_ID') || '(default)';
